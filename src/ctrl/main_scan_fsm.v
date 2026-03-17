@@ -180,11 +180,18 @@ module main_scan_fsm (
     // 1b. LED Debug Assignments (Combinational, directly from state register)
     // =========================================================================
     // LED mapping per top_fault_tolerance_test.vh:
-    //   led_cfg_ok  → IDLE state (config OK, waiting for start command)
+    //   led_cfg_ok  → IDLE state AND valid config received
     //   led_running → RUN_TEST state (BER sweep test in progress)
     //   led_sending → DO_UPLOAD state (UART packet transmission in progress)
     //   led_error   → default/unexpected state (watchdog / synthesis error)
-    assign led_cfg_ok  = (state == `MAIN_STATE_IDLE);
+
+    // cfg_valid_flag: latched HIGH when first valid config frame is received
+    // (load_seed=1, which is connected to cfg_update_pulse in top-level).
+    // Cleared only on reset. Prevents LED[0] from lighting before any config
+    // has been received, even though FSM starts in IDLE after power-on reset.
+    reg cfg_valid_flag;
+
+    assign led_cfg_ok  = (state == `MAIN_STATE_IDLE) && cfg_valid_flag;
     assign led_running = (state == `MAIN_STATE_RUN_TEST);
     assign led_sending = (state == `MAIN_STATE_DO_UPLOAD);
     // Error: any state not in the normal sequence (catch-all for unexpected states)
@@ -370,6 +377,7 @@ module main_scan_fsm (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state              <= `MAIN_STATE_IDLE;
+            cfg_valid_flag     <= 1'b0;   // BUG FIX: clear on reset, LED[0] off until config received
             busy               <= 1'b0;
             done               <= 1'b0;
             status             <= `SYS_STATUS_IDLE;
@@ -401,6 +409,12 @@ module main_scan_fsm (
             rom_req   <= 1'b0;
             mem_we_a  <= 1'b0;
             asm_start <= 1'b0;
+
+            // BUG FIX: Set cfg_valid_flag when a valid config frame is received.
+            // load_seed is connected to cfg_update_pulse in top_fault_tolerance_test.v.
+            // Once set, cfg_valid_flag stays HIGH until next reset.
+            // This ensures LED[0] only lights after at least one valid config is received.
+            if (load_seed) cfg_valid_flag <= 1'b1;
 
             // ─────────────────────────────────────────────────────────────────
             // ABORT: Highest priority — return to IDLE from any state

@@ -30,9 +30,17 @@
 // PIPELINE LATENCY:
 //   encoder_wrapper:    1 cycle (registered output on start)
 //   error_injector_unit: 1 cycle (registered output)
-//   decoder_wrapper:    2 cycles (decoder_2nrm pipeline)
+//   decoder_wrapper:    9 cycles (decoder_2nrm v2.3: 1 input reg + 7-stage channel + 1 MLD reg)
+//                       [v2.3 timing fix: was 8 cycles (v2.2), Stage 1d further split into
+//                        1d (coeff_mod only) + 1e (x_cand multiply+add only).
+//                        Added (* dont_touch="true" *) to all pipeline regs (1a/1b/1c/1d/1e)
+//                        to prevent Vivado from merging stages back.
+//                        Added set_max_fanout=4 in top.xdc for diff_mod_s1b/coeff_raw_s1c/
+//                        coeff_mod_s1d registers to force replication and reduce Net Delay.
+//                        Resolves WNS=-8.5ns.]
 //   result_comparator:  1 cycle (registered comparison)
-//   Total: ~5 cycles per trial
+//   Total: ~12 cycles per trial
+//   NOTE: DEC_WAIT state uses dec_valid polling, so this change is transparent.
 // =============================================================================
 
 `include "auto_scan_engine.vh"
@@ -278,7 +286,7 @@ module auto_scan_engine (
         .rst_n        (rst_n),
         .start        (dec_start),
         .algo_id      (algo_id),
-        .residues_in  ({192'd0, inj_out_a_latch}), // Zero-extend to 256-bit bus
+        .residues_in  (inj_out_a_latch), // 64-bit direct connection (matches DEC_INPUT_BUS_WIDTH=64)
         .data_out     (dec_out_a),
         .valid        (dec_valid_a),
         .uncorrectable(dec_uncorr_a)
@@ -289,7 +297,7 @@ module auto_scan_engine (
         .rst_n        (rst_n),
         .start        (dec_start),
         .algo_id      (algo_id),
-        .residues_in  ({192'd0, inj_out_b_latch}), // Zero-extend to 256-bit bus
+        .residues_in  (inj_out_b_latch), // 64-bit direct connection (matches DEC_INPUT_BUS_WIDTH=64)
         .data_out     (dec_out_b),
         .valid        (dec_valid_b),
         .uncorrectable(dec_uncorr_b)

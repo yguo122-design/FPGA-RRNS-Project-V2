@@ -6,4 +6,7 @@ Always prioritize:
 3. Strict following of the PROJECT_CONTEXT.md constraints (e.g., reset strategy, bit widths).
 4. Reusing existing verified code from src/algo_base whenever possible.
 5. all the comments in English
+6.for bug fix, first summary what's the root cause of bug, then give the solution to user and wait confirm
+7.After the bug is fixed, need to merge the bug in the bug report in a table (which include No, level and bug description, root causes, bug fix solutions and progress.
 If you are unsure about a Xilinx primitive parameter, ask the user or check documentation before guessing.
+

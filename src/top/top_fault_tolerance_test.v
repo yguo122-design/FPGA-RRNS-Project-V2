@@ -175,9 +175,17 @@ module top_fault_tolerance_test (
     // =========================================================================
     // 4. UART RX Module
     // =========================================================================
-    wire       rx_valid;
-    wire [7:0] rx_byte;
-    wire       rx_error; // Frame error (not used in top, but available for debug)
+    // -------------------------------------------------------------------------
+    // ILA DEBUG PROBES — LAYER 1: Physical RX
+    // Purpose: Verify that UART bytes are being received at all.
+    //   - uart_rx_sync: The synchronized RX pin. Should toggle when PC sends data.
+    //   - rx_valid:     Single-cycle pulse per received byte. Count pulses = byte count.
+    //   - rx_byte:      The received byte value. Should match sent frame bytes.
+    //   - rx_error:     Framing error flag. If HIGH → baud rate mismatch or noise.
+    // -------------------------------------------------------------------------
+    (* mark_debug = "true" *) wire       rx_valid;
+    (* mark_debug = "true" *) wire [7:0] rx_byte;
+    (* mark_debug = "true" *) wire       rx_error;
 
     uart_rx_module u_uart_rx (
         .clk_100m   (clk_sys),
@@ -195,13 +203,28 @@ module top_fault_tolerance_test (
     // Frame format: [0xAA][0x55][CMD_ID][LEN][Payload...][Checksum]
     // On valid config frame: asserts cfg_update_pulse for one cycle.
 
-    wire        cfg_update_pulse;
+    // -------------------------------------------------------------------------
+    // ILA DEBUG PROBES — LAYER 2: Protocol Parser
+    // Purpose: Verify that the parser FSM is advancing and producing valid output.
+    //   - parser_state_dbg: Parser FSM state (0=IDLE,1=HDR2,2=CMD,3=LEN,4=PAYLOAD,5=CHKSUM)
+    //                       Should advance 0→1→2→3→4→5→0 for each valid frame.
+    //                       If stuck at 0: no bytes received (Layer 1 problem).
+    //                       If stuck at 1~4: frame format mismatch.
+    //                       If returns to 0 from 5 without cfg_update_pulse: checksum error.
+    //   - checksum_error:   HIGH for one cycle when checksum fails.
+    //                       If HIGH: frame received but checksum wrong.
+    //   - cfg_update_pulse: HIGH for one cycle when a valid frame is fully parsed.
+    //                       This is the key signal — if never HIGH, config never applied.
+    //   - cfg_burst_len:    Parsed burst length. Should match what PC sent.
+    //   - cfg_algo_id:      Parsed algorithm ID. Should match what PC sent.
+    // -------------------------------------------------------------------------
+    (* mark_debug = "true" *) wire        cfg_update_pulse;
     wire [7:0]  cfg_algo_id;
     wire [7:0]  cfg_burst_len;
     wire [7:0]  cfg_error_mode;
     wire [31:0] cfg_sample_count;
-    wire [2:0]  parser_state_dbg;  // Debug: parser FSM state
-    wire        checksum_error;    // Debug: checksum mismatch indicator
+    (* mark_debug = "true" *) wire [2:0]  parser_state_dbg;
+    (* mark_debug = "true" *) wire        checksum_error;
 
     protocol_parser u_parser (
         .clk             (clk_sys),
@@ -228,14 +251,25 @@ module top_fault_tolerance_test (
     wire        fsm_done;   // From main_scan_fsm (connected below)
     wire        tx_busy_w;  // From uart_tx_module (connected below)
 
-    wire        test_active;    // From register bank → FSM start trigger
-    wire        config_locked;  // From register bank → seed lock enable
-    wire [7:0]  reg_algo_id;    // Registered algorithm ID
-    wire [7:0]  reg_burst_len;  // Registered burst length
-    wire [7:0]  reg_error_mode; // Registered error mode
-    wire [31:0] reg_sample_count; // Registered sample count
+    // -------------------------------------------------------------------------
+    // ILA DEBUG PROBES — LAYER 3: Control Flow
+    // Purpose: Verify that config reaches the FSM and triggers the test.
+    //   - test_active:   HIGH after valid config received, until test completes.
+    //                    If cfg_update_pulse fired but test_active stays LOW:
+    //                    ctrl_register_bank has a bug.
+    //   - config_locked: HIGH when config is locked (same cycle as test_active).
+    //   - fsm_busy:      HIGH when FSM is running (not IDLE/FINISH).
+    //                    Should go HIGH shortly after test_active rises.
+    //   - fsm_done:      Single-cycle pulse when sweep completes.
+    // -------------------------------------------------------------------------
+    (* mark_debug = "true" *) wire        test_active;
+    (* mark_debug = "true" *) wire        config_locked;
+    wire [7:0]  reg_algo_id;
+    wire [7:0]  reg_burst_len;
+    wire [7:0]  reg_error_mode;
+    wire [31:0] reg_sample_count;
 
-    ctrl_register_bank u_reg_bank (
+  ctrl_register_bank u_reg_bank (
         .clk              (clk_sys),
         .rst_n            (rst_n_sync),
         // Configuration input from parser

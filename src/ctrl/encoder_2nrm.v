@@ -55,37 +55,18 @@ module encoder_2nrm (
     // We pack into 64 bits for alignment. 
     // Layout: {Reserved(23), R1(9), R2(8), R3(6), R4(6), R5(6), R6(6)}
 
-    // =========================================================================
-    // 2. Safe Modulo Function (Simulation & Synthesis Friendly)
-    // =========================================================================
-    // Note: For synthesis, consider replacing this with dedicated modulo logic 
-    // or LUTs if timing is critical. For now, this ensures functional correctness.
-    function [31:0] safe_mod;
-        input [31:0] val;
-        input [31:0] mod;
-        reg [31:0] temp;
-        begin
-            temp = val;
-            // Optimized loop: subtract only if necessary
-            // Since max val is 65535 and min mod is 53, max iterations ~1200 (safe for combinatorial)
-            while (temp >= mod) begin
-                temp = temp - mod;
-            end
-            safe_mod = temp;
-        end
-    endfunction
 
     // =========================================================================
     // 3. Combinational Logic: Residue Calculation (Channel A)
     // =========================================================================
     wire [31:0] r1_a, r2_a, r3_a, r4_a, r5_a, r6_a;
     
-    assign r1_a = safe_mod(data_in_A, M1);
-    assign r2_a = safe_mod(data_in_A, M2);
-    assign r3_a = safe_mod(data_in_A, M3);
-    assign r4_a = safe_mod(data_in_A, M4);
-    assign r5_a = safe_mod(data_in_A, M5);
-    assign r6_a = safe_mod(data_in_A, M6);
+    assign r1_a = data_in_A % M1;
+    assign r2_a = data_in_A % M2;
+    assign r3_a = data_in_A % M3;
+    assign r4_a = data_in_A % M4;
+    assign r5_a = data_in_A % M5;
+    assign r6_a = data_in_A % M6;
 
     // Packing Channel A
     wire [63:0] packed_a;
@@ -104,12 +85,12 @@ module encoder_2nrm (
     // =========================================================================
     wire [31:0] r1_b, r2_b, r3_b, r4_b, r5_b, r6_b;
     
-    assign r1_b = safe_mod(data_in_B, M1);
-    assign r2_b = safe_mod(data_in_B, M2);
-    assign r3_b = safe_mod(data_in_B, M3);
-    assign r4_b = safe_mod(data_in_B, M4);
-    assign r5_b = safe_mod(data_in_B, M5);
-    assign r6_b = safe_mod(data_in_B, M6);
+    assign r1_b = data_in_B % M1;
+    assign r2_b = data_in_B % M2;
+    assign r3_b = data_in_B % M3;
+    assign r4_b = data_in_B % M4;
+    assign r5_b = data_in_B % M5;
+    assign r6_b = data_in_B % M6;
 
     // Packing Channel B
     wire [63:0] packed_b;

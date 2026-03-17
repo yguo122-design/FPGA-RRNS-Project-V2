@@ -117,22 +117,37 @@ module result_comparator (
     wire fifo_wr_en = start    && !fifo_full;
     wire fifo_rd_en = valid_in && !fifo_empty;
 
-    // Read data (combinational, from current rd_ptr position)
+    // -------------------------------------------------------------------------
+    // FIFO Memory Write: SYNCHRONOUS ONLY (no async reset)
+    // KEY CHANGE: Separating memory write into a pure posedge-clk block allows
+    // Vivado to infer Distributed RAM (LUT-RAM) instead of 256 Flip-Flops.
+    // Memory content is undefined after reset, but pointer reset (below)
+    // ensures fifo_empty=1, so no uninitialized location is ever read.
+    // -------------------------------------------------------------------------
+    always @(posedge clk) begin
+        if (fifo_wr_en) begin
+            fifo_mem[wr_ptr[`COMP_FIFO_ADDR_WIDTH-1:0]] <= data_orig;
+        end
+    end
+
+    // FIFO Read: Combinational (Distributed RAM supports async read)
+    // fifo_rd_data is valid in the same cycle as rd_ptr, no extra latency.
     wire [`COMP_DATA_WIDTH-1:0] fifo_rd_data;
     assign fifo_rd_data = fifo_mem[rd_ptr[`COMP_FIFO_ADDR_WIDTH-1:0]];
 
-    // FIFO sequential logic
+    // -------------------------------------------------------------------------
+    // FIFO Pointer Control: Async reset retained (plain registers, not RAM)
+    // -------------------------------------------------------------------------
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             wr_ptr <= {(`COMP_FIFO_ADDR_WIDTH+1){1'b0}};
             rd_ptr <= {(`COMP_FIFO_ADDR_WIDTH+1){1'b0}};
         end else begin
-            // Write: push data_orig into FIFO
+            // Advance write pointer when data is pushed
             if (fifo_wr_en) begin
-                fifo_mem[wr_ptr[`COMP_FIFO_ADDR_WIDTH-1:0]] <= data_orig;
                 wr_ptr <= wr_ptr + 1'b1;
             end
-            // Read: advance read pointer (data is read combinationally)
+            // Advance read pointer when data is popped
             if (fifo_rd_en) begin
                 rd_ptr <= rd_ptr + 1'b1;
             end

@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Tuple
 
 # ================= Configuration Constants =================
-DEFAULT_PORT = 'COM3'       # Default serial port (Linux: /dev/ttyUSB0)
+DEFAULT_PORT = 'COM8'       # Default serial port (Linux: /dev/ttyUSB0)
 DEFAULT_BAUDRATE = 921600   # Baud rate
 TIMEOUT_SEC = 30.0          # Receive timeout (seconds). FPGA may need time for large sample counts.
 

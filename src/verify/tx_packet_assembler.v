@@ -292,7 +292,7 @@ module tx_packet_assembler (
                 `ASM_STATE_GINFO: begin
                     tx_valid <= 1'b1;
                     case (ginfo_cnt)
-                        2'd0: tx_data <= 8'd`PKT_TOTAL_POINTS; // 91 = 0x5B
+                        2'd0: tx_data <= `PKT_TOTAL_POINTS;    // 91 = 0x5B
                         2'd1: tx_data <= {6'd0, algo_id_latch};
                         2'd2: tx_data <= {6'd0, mode_id_latch};
                         default: tx_data <= 8'h00;
@@ -340,7 +340,7 @@ module tx_packet_assembler (
 
                         if (byte_cnt == 5'd21) begin
                             // All 22 bytes of this entry sent
-                            if (point_cnt == 7'd(`PKT_TOTAL_POINTS - 1)) begin
+                            if (point_cnt == 7'd90) begin  // 7'd(`PKT_TOTAL_POINTS - 1) = 7'd90
                                 // All 91 points sent → send checksum
                                 tx_valid <= 1'b0;
                                 state    <= `ASM_STATE_CHECKSUM;
