@@ -3,14 +3,165 @@
 // Description: 2NRM Decoder with MLD (Maximum Likelihood Decoding)
 //              Part of FPGA Multi-Algorithm Fault-Tolerant Test System
 //              Implements Design Doc Section 2.3.3.3
-// Version: v2.7  -- TIMING FIX: DSP48E1 internal pipeline registers enabled
-//                   Stage 1c and 1e each split into two sub-stages:
-//                   (1) input register (AREG/BREG) + (2) multiply output register (MREG/PREG)
-//                   This forces Vivado to pack registers INTO the DSP48E1 slice,
-//                   cutting Logic Delay from ~7ns to ~1ns per multiply stage.
-//                   Total channel latency: 6 -> 8 cycles (+2 cycles for 2 DSP stages).
-//                   Total decoder latency: 8 -> 10 cycles.
-//                   (v2.6: use_dsp="YES" correct but AREG/BREG/MREG still 0 -- combinational)
+// Version: v2.16 -- STAGE 2 THREE-WAY PIPELINE SPLIT (2+2+2)
+//                   v2.15 timing report showed Slack = -1.688ns on the path:
+//                     ch13/x_cand_16_s2a_reg[1]/C -> ch13/cand_r_s2_reg[4][4]/D
+//                   Logic Delay = 5.846ns (CARRY4=8), Route Delay = 5.700ns
+//                   x_cand_16_s2a[1] had fo=40 (dont_touch prevented replication)
+//
+//                   ROOT CAUSE: v2.15 split Stage 2 into 3+3 (two sub-stages), but
+//                   each sub-stage still computes 3 modulo operations on a 16-bit
+//                   input. Each modulo generates ~8 CARRY4 stages (~5.8ns logic
+//                   delay), still exceeding the 10ns budget. The 3+3 split was
+//                   insufficient because the per-modulo CARRY4 count did not change.
+//                   Additionally, x_cand_16_s2a had dont_touch="true" preventing
+//                   register replication (fo=40, route delay 0.979ns).
+//
+//                   FIX: Split Stage 2 into THREE pipeline sub-stages (2+2+2):
+//                     Stage 2a [new]: Compute % 257, % 256 (2 moduli)
+//                       -> cand_r_s2a[0..1], forward x_cand_16_s2a, recv_r_s2a
+//                     Stage 2b [new]: Compute % 61, % 59 (2 moduli)
+//                       -> cand_r_s2b[2..3], forward x_cand_16_s2b, recv_r_s2b
+//                     Stage 2c [new]: Compute % 55, % 53 (2 moduli)
+//                       -> cand_r_s2[4..5], merge all into final cand_r_s2[0..5]
+//                   Each sub-stage has at most 2 modulo operations -> ~4-5 CARRY4
+//                   per critical path -> logic delay ~2.5ns per stage.
+//                   All intermediate x_cand_16 registers use max_fanout=8 (not
+//                   dont_touch) to allow Vivado to replicate and reduce route delay.
+//                   Total Stage 2 latency: 3 cycles (was 2 cycles in v2.15).
+//                   Total decoder latency increases by 1 more cycle (absorbed by
+//                   DEC_WAIT). This fix applies uniformly to all 15 channels since
+//                   they share the same decoder_channel_2nrm_param module.
+//
+// Version: v2.15 -- STAGE 2 PIPELINE SPLIT + x_cand_16_s1e FANOUT FIX
+//                   v2.14 timing report showed Slack = -1.357ns on the path:
+//                     ch9/x_cand_16_s1e_reg[3]/C -> ch9/cand_r_s2_reg[4][2]/D
+//                   Logic Delay = 5.584ns (CARRY4=10), Route Delay = 5.803ns
+//                   x_cand_16_s1e[3] had fo=70 (dont_touch prevented replication)
+//
+//                   ROOT CAUSE 1 (primary): Stage 2 computes 6 constant-modulo
+//                   operations (% 257, % 256, % 61, % 59, % 55, % 53) on a 16-bit
+//                   input in a single clock cycle. Each modulo generates ~10 CARRY4
+//                   stages (~5.6ns logic delay), exceeding the 10ns budget.
+//
+//                   ROOT CAUSE 2 (secondary): x_cand_16_s1e had dont_touch="true"
+//                   which prevented Vivado from replicating the register to reduce
+//                   fanout. With fo=70, the first net alone consumed 1.155ns route
+//                   delay.
+//
+//                   FIX 1: Remove dont_touch from x_cand_16_s1e, replace with
+//                   max_fanout=8. Vivado will replicate the register (~9 copies for
+//                   fo=70), reducing per-copy fanout to ~8 and route delay to ~0.3ns.
+//
+//                   FIX 2: Split Stage 2 into two pipeline sub-stages:
+//                     Stage 2a [new]: Compute cand_r_comb[0..2] (% 257, % 256, % 61)
+//                       and register into cand_r_s2a[0..2]. Also register x_cand_16
+//                       and recv_r for Stage 2b alignment.
+//                     Stage 2b [new]: Compute cand_r_comb[3..5] (% 59, % 55, % 53)
+//                       and register into cand_r_s2[3..5]. Merge with cand_r_s2a
+//                       into final cand_r_s2[0..5].
+//                   Each sub-stage has at most 3 modulo operations -> ~3-4 CARRY4
+//                   per critical path -> logic delay ~2ns per stage.
+//                   Total Stage 2 latency: 2 cycles (was 1 cycle in v2.14).
+//                   Total decoder latency increases by 1 cycle (absorbed by DEC_WAIT).
+//
+// Version: v2.14 -- STAGE 1a/1b BIT-WIDTH FIX: Reduce diff_raw_s1a (18->9 bit) and
+//                   diff_mod_s1b (18->8 bit) to eliminate redundant CARRY4 stages.
+//
+//                   v2.13 timing report showed Slack = -0.845ns on the path:
+//                     ch11/diff_raw_s1a_reg[3]/C -> ch11/diff_mod_s1b_reg[3]/D
+//                   Logic Delay = 5.004ns (CARRY4=6), Route Delay = 5.705ns
+//
+//                   ROOT CAUSE: diff_raw_s1a was declared as 18-bit, but the
+//                   mathematical upper bound is only 511 (9-bit):
+//                     diff_raw = rj + P_M2 - ri
+//                     rj  <= P_M2-1 <= 255  (8-bit)
+//                     P_M2 <= 256           (9-bit)
+//                     ri  >= 0
+//                     diff_raw_max = 255 + 256 - 0 = 511 < 2^9 = 512
+//                   Bits [17:9] of diff_raw_s1a are always 0 (9 redundant bits).
+//                   Vivado synthesized a full 18-bit constant-modulo circuit for
+//                   Stage 1b (diff_raw_s1a % P_M2), generating 6 CARRY4 stages.
+//
+//                   Similarly, diff_mod_s1b = diff_raw % P_M2 <= P_M2-1 <= 255,
+//                   so 8-bit is sufficient (was 18-bit, 10 redundant bits).
+//
+//                   FIX:
+//                     diff_raw wire:    [17:0] -> [8:0]  (9-bit, max 511)
+//                     diff_raw_s1a reg: [17:0] -> [8:0]  (9-bit)
+//                     diff_mod_1b wire: [17:0] -> [7:0]  (8-bit, max P_M2-1=255)
+//                     diff_mod_s1b reg: [17:0] -> [7:0]  (8-bit)
+//                   Stage 1b modulo circuit now operates on 9-bit input ->
+//                   ~1-2 CARRY4 stages (~1.5ns logic delay).
+//                   Expected Slack improvement: -0.845ns -> >= 0ns.
+//
+//                   NOTE: diff_mod_s1b feeds into DSP A-port (25-bit) via zero-extension.
+//                   The zero-extension in dsp1c_a_in changes from {7'd0, diff_mod_s1b[17:0]}
+//                   to {17'd0, diff_mod_s1b[7:0]} (same 25-bit result, different padding).
+//
+// Version: v2.13 -- MLD PIPELINE FIX: Split 15-way minimum distance tree into two
+//                   registered pipeline stages to eliminate 10.313ns route delay.
+//
+//                   v2.12 timing report showed Slack = -2.737ns on the path:
+//                     ch0/distance_reg[2]/C -> data_out_reg[3]/D
+//                   Route Delay = 10.313ns (81% of total), Logic Levels = 15
+//
+//                   ROOT CAUSE: The MLD for-loop:
+//                     for (k = 0; k < 15; k++) if (ch_dist[k] < min_dist_comb) ...
+//                   Verilog for-loop sequential semantics force Vivado to synthesize
+//                   a 15-level serial priority chain (ch0->ch1->...->ch14), NOT a
+//                   balanced log2(15)~4-level tree as the comment claimed. Each level
+//                   crosses different SLICEs, accumulating 10.313ns route delay.
+//
+//                   FIX: Split MLD into two registered pipeline stages (v2.13):
+//                     Stage MLD-A [new]: Two parallel for-loops over ch0~ch7 and
+//                       ch8~ch14, each finding a partial minimum. Results stored in
+//                       registered mid_dist_a/mid_x_a and mid_dist_b/mid_x_b.
+//                       Each loop is at most 8 levels -> route delay ~4-5ns.
+//                     Stage MLD-B [new]: Final comparison of mid_a vs mid_b,
+//                       output data_out/valid/uncorrectable.
+//                   Total MLD latency: 2 cycles (was 1 cycle in v2.12).
+//                   Total decoder latency increases by 1 cycle (absorbed by DEC_WAIT).
+//
+// Version: v2.12 -- CRITICAL PATH FIX: coeff_raw_s1c bit-width reduction (36-bit -> 14-bit)
+//                   v2.11 timing report showed Slack = -3.803ns on the path:
+//                     coeff_raw_s1c_reg[4]/C -> coeff_mod_s1d_reg[3]/D
+//                   Logic Delay = 7.149ns (24 logic levels: CARRY4=12, LUT=12)
+//
+//                   ROOT CAUSE: coeff_raw_s1c was declared as 36-bit (truncated from
+//                   48-bit DSP P output). Stage 1d computes coeff_raw_s1c % P_M2, and
+//                   Vivado synthesized a full 36-bit constant-modulo circuit, generating
+//                   12 CARRY4 stages (~7ns logic delay). Additionally, coeff_raw_s1c[4]
+//                   had fanout=44 (vs max_fanout=16), causing 0.842ns route delay on
+//                   the first net alone.
+//
+//                   MATHEMATICAL PROOF that 14-bit is sufficient:
+//                     diff_mod_s1b range: 0 ~ (P_M2 - 1), P_M2_max = 256 -> max = 255 (8-bit)
+//                     P_INV range: max value across all 15 channels = 56 (6-bit)
+//                     coeff_raw = diff_mod * P_INV <= 255 * 56 = 14,280 < 2^14 = 16,384
+//                     Therefore: coeff_raw_s1c[13:0] is sufficient; bits [35:14] are always 0.
+//
+//                   FIX: Change coeff_raw_s1c from reg[35:0] to reg[13:0], and truncate
+//                   DSP output at dsp1c_p_out[13:0] instead of dsp1c_p_out[35:0].
+//                   Stage 1d modulo circuit now operates on 14-bit input -> ~3-4 CARRY4
+//                   stages (~2ns logic delay). Expected Slack improvement: +5.8ns -> >= 0ns.
+//
+//                   Stage 1c DSP48E1 configuration (unchanged from v2.11):
+//                     OPMODE = 7'b0000101  (P = A * B)
+//                     ALUMODE = 4'b0000    (addition)
+//                     A_INPUT = "DIRECT", B_INPUT = "DIRECT"
+//                     AREG=1, BREG=1, MREG=1, PREG=1  (4-stage pipeline)
+//                     Pipeline: A/B -> AREG/BREG -> MULT -> MREG -> PREG -> P
+//
+//                   Stage 1e DSP48E1 configuration (unchanged from v2.11):
+//                     OPMODE = 7'b0110101  (P = C + A * B, MAC mode)
+//                     ALUMODE = 4'b0000    (addition)
+//                     A_INPUT = "DIRECT", B_INPUT = "DIRECT"
+//                     AREG=1, BREG=1, CREG=1, MREG=1, PREG=1  (5-stage pipeline)
+//                     Pipeline: A/B/C -> AREG/BREG/CREG -> MULT+ADD -> MREG -> PREG -> P
+//
+//                   LATENCY IMPACT: None. Pipeline stage count unchanged from v2.11.
+//                   auto_scan_engine DEC_WAIT polls dec_valid, unaffected.
 //
 // Algorithm: 2NRM-RRNS with Moduli Set {257, 256, 61, 59, 55, 53}
 //   - 6 moduli: 2 information (257, 256) + 4 redundant (61, 59, 55, 53)
@@ -180,20 +331,29 @@ module decoder_channel_2nrm_param #(
     end
 
     // diff_raw = rj + P_M2 - ri  (no modulo here -- just addition/subtraction)
-    wire [17:0] diff_raw;
-    assign diff_raw = {9'b0, rj} + P_M2 - {9'b0, ri};
+    //
+    // v2.14 BIT-WIDTH FIX: diff_raw reduced from 18-bit to 9-bit.
+    // Mathematical proof:
+    //   rj  <= P_M2 - 1 <= 255  (8-bit)
+    //   P_M2 <= 256              (9-bit)
+    //   ri  >= 0
+    //   diff_raw_max = 255 + 256 - 0 = 511 < 2^9 = 512
+    //   => bits [17:9] are always 0; only [8:0] carry valid data.
+    // With 9-bit input, Stage 1b modulo circuit uses ~1-2 CARRY4 vs 6 CARRY4 before.
+    wire [8:0] diff_raw;
+    assign diff_raw = rj + P_M2[8:0] - ri;  // 9-bit: max = 255+256-0 = 511 < 512
 
     // --- Stage 1a pipeline registers ---
     // (* dont_touch = "true" *) prevents Vivado from merging this stage with
     // Stage 1b (which would recreate the long diff_raw->diff_mod chain).
-    (* dont_touch = "true" *) reg [17:0] diff_raw_s1a;
+    (* dont_touch = "true" *) reg [8:0]  diff_raw_s1a;  // v2.14: was [17:0]
     (* dont_touch = "true" *) reg [8:0]  ri_s1a;
     (* dont_touch = "true" *) reg [8:0]  r0_s1a, r1_s1a, r2_s1a, r3_s1a, r4_s1a, r5_s1a;
     (* dont_touch = "true" *) reg        valid_s1a;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            diff_raw_s1a <= 18'd0;
+            diff_raw_s1a <= 9'd0;
             ri_s1a       <= 9'd0;
             r0_s1a <= 9'd0; r1_s1a <= 9'd0; r2_s1a <= 9'd0;
             r3_s1a <= 9'd0; r4_s1a <= 9'd0; r5_s1a <= 9'd0;
@@ -213,23 +373,27 @@ module decoder_channel_2nrm_param #(
     // Only ONE modulo operation: ~8 LUT levels
     // =========================================================================
 
-    wire [17:0] diff_mod_1b;
-    assign diff_mod_1b = diff_raw_s1a % P_M2;
+    // v2.14 BIT-WIDTH FIX: diff_mod_1b reduced from 18-bit to 8-bit.
+    // diff_mod = diff_raw_s1a % P_M2 <= P_M2 - 1 <= 255 < 2^8 = 256
+    // 8-bit is sufficient; was 18-bit (10 redundant bits).
+    wire [7:0] diff_mod_1b;
+    assign diff_mod_1b = diff_raw_s1a % P_M2;  // 8-bit: max = P_M2-1 <= 255
 
     // --- Stage 1b pipeline registers ---
     // dont_touch: prevents Vivado from merging Stage 1b with 1c.
-    // max_fanout=4: diff_mod_s1b drives Stage 1c multiply in all 15 channel instances;
+    // max_fanout=4: diff_mod_s1b drives Stage 1c DSP A-port in all 15 channel instances;
     //   Vivado must replicate this register (fanout<=4) to reduce Net Delay.
     //   NOTE: set_max_fanout in XDC is NOT supported ([Designutils 20-1307]);
     //         this in-code attribute is the correct method.
-    (* dont_touch = "true", max_fanout = 4 *) reg [17:0] diff_mod_s1b;
+    // v2.14: reduced from [17:0] to [7:0] (8-bit, max P_M2-1 = 255)
+    (* dont_touch = "true", max_fanout = 4 *) reg [7:0] diff_mod_s1b;
     (* dont_touch = "true" *) reg [8:0]  ri_s1b;
     (* dont_touch = "true" *) reg [8:0]  r0_s1b, r1_s1b, r2_s1b, r3_s1b, r4_s1b, r5_s1b;
     (* dont_touch = "true" *) reg        valid_s1b;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            diff_mod_s1b <= 18'd0;
+            diff_mod_s1b <= 8'd0;
             ri_s1b       <= 9'd0;
             r0_s1b <= 9'd0; r1_s1b <= 9'd0; r2_s1b <= 9'd0;
             r3_s1b <= 9'd0; r4_s1b <= 9'd0; r5_s1b <= 9'd0;
@@ -244,92 +408,237 @@ module decoder_channel_2nrm_param #(
     end
 
     // =========================================================================
-    // STAGE 1c: Multiplication
-    // Combinational: coeff_raw = diff_mod_s1b * P_INV
-    // Only ONE multiply (constant * variable).
+    // STAGE 1c: Manual DSP48E1 Instantiation (v2.11)
+    // Operation: coeff_raw = diff_mod_s1b * P_INV
     //
-    // DSP OPTIMIZATION (v2.5):
-    //   (* use_dsp = "true" *) forces Vivado to map this multiplication to a
-    //   DSP48E1 hardware slice instead of LUT carry chains.
-    //   DSP48E1 multiply latency: ~1-2 ns (vs ~7-8 ns for LUT implementation).
-    //   This is the primary fix for Logic Delay ~7.4ns on the critical path.
-    //   Applied to the result wire so the attribute covers the multiply operator.
+    // All inference-based approaches (v2.6~v2.10b) failed to pack AREG/MREG/PREG.
+    // Solution: Manually instantiate DSP48E1 with explicit pipeline configuration.
+    //
+    // DSP48E1 Pipeline (4 stages, 3 clock cycles from input to P output):
+    //   Cycle N:   A/B inputs sampled by fabric registers (pre-DSP)
+    //   Cycle N+1: AREG/BREG latch A/B inside DSP
+    //   Cycle N+2: MREG latches A*B product inside DSP
+    //   Cycle N+3: PREG latches final result inside DSP -> P output
+    //
+    // OPMODE = 7'b0000101: P = A * B (multiply only, no accumulate)
+    // ALUMODE = 4'b0000:   Z + W + X + Y + CIN (standard addition)
     // =========================================================================
 
-    // --- Stage 1c: DSP AREG + MREG in ONE always block ---
-    // Both the input register (dsp_a_1c -> AREG) and the output register
-    // (coeff_raw_s1c -> MREG) are in the SAME always block so Vivado can
-    // clearly see the pattern: reg_in -> multiply -> reg_out and pack both
-    // into DSP48E1 internal pipeline registers.
-    // valid_s1c_pre is the intermediate valid (1 cycle after valid_s1b).
-    // --- Stage 1c: DSP48E1 AREG + MREG (full-precision 48-bit intermediate) ---
-    // KEY FIX (v2.7b): Use 48-bit full-precision intermediate register mult_res_1c_full
-    // to match DSP48E1 native P-port width (48-bit). Vivado can then map:
-    //   dsp_a_1c [17:0]       -> DSP A-port (18-bit) -> AREG=1
-    //   mult_res_1c_full[47:0] -> DSP P-port (48-bit) -> MREG=1
-    // Truncation to coeff_raw_s1c [35:0] happens AFTER MREG (external FF).
-    // Without full-precision intermediate, Vivado sees width mismatch and
-    // falls back to LUT implementation (AREG=0, MREG=0).
-    (* dont_touch = "true" *) reg [17:0] dsp_a_1c;          // DSP AREG (18-bit A-port)
+    // --- Stage 1c: Fabric input registers (feed into DSP A/B ports) ---
+    // These are fabric FFs that drive the DSP A and B input ports.
+    // The DSP's internal AREG/BREG will then latch these on the next cycle.
+    (* dont_touch = "true" *) reg [24:0] dsp1c_a_in;  // 25-bit A-port input (zero-extended)
+    (* dont_touch = "true" *) reg [17:0] dsp1c_b_in;  // 18-bit B-port input (P_INV)
     (* dont_touch = "true" *) reg [8:0]  ri_s1c_pre;
     (* dont_touch = "true" *) reg [8:0]  r0_s1c_pre, r1_s1c_pre, r2_s1c_pre;
     (* dont_touch = "true" *) reg [8:0]  r3_s1c_pre, r4_s1c_pre, r5_s1c_pre;
     (* dont_touch = "true" *) reg        valid_s1c_pre;
 
-    (* dont_touch = "true" *) reg [47:0] mult_res_1c_full;   // DSP MREG (48-bit P-port)
-    (* dont_touch = "true" *) reg [8:0]  ri_s1c_mid;
-    (* dont_touch = "true" *) reg [8:0]  r0_s1c_mid, r1_s1c_mid, r2_s1c_mid;
-    (* dont_touch = "true" *) reg [8:0]  r3_s1c_mid, r4_s1c_mid, r5_s1c_mid;
-    (* dont_touch = "true" *) reg        valid_s1c_mid;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            dsp1c_a_in    <= 25'd0;
+            dsp1c_b_in    <= 18'd0;
+            ri_s1c_pre    <= 9'd0;
+            r0_s1c_pre <= 9'd0; r1_s1c_pre <= 9'd0; r2_s1c_pre <= 9'd0;
+            r3_s1c_pre <= 9'd0; r4_s1c_pre <= 9'd0; r5_s1c_pre <= 9'd0;
+            valid_s1c_pre <= 1'b0;
+        end else begin
+            // Zero-extend 8-bit diff_mod_s1b to 25-bit DSP A-port
+            // v2.14: diff_mod_s1b is now [7:0] (8-bit), zero-extend with 17 bits
+            dsp1c_a_in    <= {17'd0, diff_mod_s1b[7:0]};
+            // P_INV loaded into 18-bit DSP B-port
+            dsp1c_b_in    <= P_INV[17:0];
+            ri_s1c_pre    <= ri_s1b;
+            r0_s1c_pre <= r0_s1b; r1_s1c_pre <= r1_s1b; r2_s1c_pre <= r2_s1b;
+            r3_s1c_pre <= r3_s1b; r4_s1c_pre <= r4_s1b; r5_s1c_pre <= r5_s1b;
+            valid_s1c_pre <= valid_s1b;
+        end
+    end
 
-    (* dont_touch = "true", max_fanout = 4 *) reg [35:0] coeff_raw_s1c; // External FF (truncation)
+    // --- Stage 1c: DSP48E1 output wire ---
+    wire [47:0] dsp1c_p_out;  // 48-bit P output from DSP48E1
+
+    // --- Stage 1c: Manual DSP48E1 instantiation ---
+    // AREG=1, BREG=1: latch A/B inputs inside DSP (1 cycle)
+    // MREG=1: latch multiplier output inside DSP (1 cycle)
+    // PREG=1: latch final result inside DSP (1 cycle)
+    // Total DSP internal pipeline: 3 cycles (AREG -> MREG -> PREG)
+    DSP48E1 #(
+        // Feature control
+        .USE_MULT    ("MULTIPLY"),  // Use multiplier
+        .USE_SIMD    ("ONE48"),     // Single 48-bit operation
+        .USE_DPORT   ("FALSE"),     // No D-port pre-adder
+        // Pipeline register configuration (KEY: all enabled)
+        .AREG        (1),           // 1 pipeline register on A input -> AREG
+        .BREG        (1),           // 1 pipeline register on B input -> BREG
+        .CREG        (0),           // No C register (not used in multiply)
+        .DREG        (1),           // D register (tied off)
+        .MREG        (1),           // 1 pipeline register on multiplier output -> MREG
+        .PREG        (1),           // 1 pipeline register on P output -> PREG
+        .ADREG       (1),           // A+D pre-adder register
+        .ACASCREG    (1),           // Cascade register matches AREG
+        .BCASCREG    (1),           // Cascade register matches BREG
+        // Data width
+        .A_INPUT     ("DIRECT"),    // A input from fabric (not cascade)
+        .B_INPUT     ("DIRECT"),    // B input from fabric (not cascade)
+        // Initialization
+        .AUTORESET_PATDET("NO_RESET"),
+        .MASK        (48'h3fffffffffff),
+        .PATTERN     (48'h000000000000),
+        .SEL_MASK    ("MASK"),
+        .SEL_PATTERN ("PATTERN"),
+        .USE_PATTERN_DETECT("NO_PATDET")
+    ) u_dsp_1c (
+        .CLK         (clk),
+        // Control signals
+        .OPMODE      (7'b0000101),  // P = A * B
+        .ALUMODE     (4'b0000),     // Z + W + X + Y (standard add)
+        .CARRYINSEL  (3'b000),
+        // Clock enables (all enabled) — standard DSP48E1 CE ports
+        // CEAD: CE for A+D pre-adder register (ADREG). USE_DPORT=FALSE so ADREG is
+        //       bypassed and CEAD has no functional effect, but must be connected to
+        //       avoid [Synth 8-7071] unconnected port warning.
+        .CEA1        (1'b1), .CEA2        (1'b1),
+        .CEB1        (1'b1), .CEB2        (1'b1),
+        .CEC         (1'b1), .CED         (1'b1),
+        .CEM         (1'b1), .CEP         (1'b1),
+        .CECTRL      (1'b1), .CEINMODE    (1'b1),
+        .CEAD        (1'b1),         // CE for ADREG (USE_DPORT=FALSE, no functional effect)
+        // Synchronous resets (active high, tied low — we use async rst_n externally)
+        .RSTA        (1'b0), .RSTB        (1'b0),
+        .RSTC        (1'b0), .RSTD        (1'b0),
+        .RSTM        (1'b0), .RSTP        (1'b0),
+        .RSTALLCARRYIN(1'b0), .RSTALUMODE (1'b0),
+        .RSTCTRL     (1'b0), .RSTINMODE   (1'b0),
+        // Data inputs
+        .A           (dsp1c_a_in),  // 25-bit A input (zero-extended diff_mod)
+        .B           (dsp1c_b_in),  // 18-bit B input (P_INV)
+        .C           (48'd0),       // C not used
+        .D           (25'd0),       // D not used (USE_DPORT=FALSE)
+        .CARRYIN     (1'b0),
+        .INMODE      (5'b00000),    // Standard mode: A2->A, B2->B
+        // Cascade inputs (not used)
+        .ACIN        (30'd0), .BCIN        (18'd0),
+        .PCIN        (48'd0), .CARRYCASCIN (1'b0),
+        .MULTSIGNIN  (1'b0),
+        // Outputs
+        .P           (dsp1c_p_out), // 48-bit result: diff_mod * P_INV
+        // Unused outputs
+        .ACOUT       (), .BCOUT       (),
+        .PCOUT       (), .CARRYCASCOUT(),
+        .MULTSIGNOUT (), .OVERFLOW    (),
+        .UNDERFLOW   (), .PATTERNDETECT(),
+        .PATTERNBDETECT(), .CARRYOUT  ()
+    );
+
+    // --- Stage 1c: Output pipeline registers (after DSP PREG) ---
+    // The DSP PREG output (dsp1c_p_out) is already registered inside the DSP.
+    // We add fabric FFs here to:
+    //   1. Truncate 48-bit result to 36-bit (coeff_raw_s1c)
+    //   2. Propagate side-channel signals (ri, r0..r5, valid) with matching latency
+    //
+    // DSP pipeline adds 3 cycles (AREG+MREG+PREG), so side-channel signals
+    // need 3 additional pipeline stages to stay aligned.
+    // We already have 1 stage (dsp1c_a_in block above), so we need 2 more here.
+
+    // Side-channel pipeline stage 2 (aligns with DSP MREG output)
+    (* dont_touch = "true" *) reg [8:0]  ri_s1c_p2;
+    (* dont_touch = "true" *) reg [8:0]  r0_s1c_p2, r1_s1c_p2, r2_s1c_p2;
+    (* dont_touch = "true" *) reg [8:0]  r3_s1c_p2, r4_s1c_p2, r5_s1c_p2;
+    (* dont_touch = "true" *) reg        valid_s1c_p2;
+
+    // Side-channel pipeline stage 3 (aligns with DSP MREG output, Cycle N+2)
+    // NOTE: This stage propagates side-channel signals only.
+    //       coeff_raw_s1c is NOT latched here — it comes from DSP PREG (Cycle N+3).
+    (* dont_touch = "true" *) reg [8:0]  ri_s1c_p3;
+    (* dont_touch = "true" *) reg [8:0]  r0_s1c_p3, r1_s1c_p3, r2_s1c_p3;
+    (* dont_touch = "true" *) reg [8:0]  r3_s1c_p3, r4_s1c_p3, r5_s1c_p3;
+    (* dont_touch = "true" *) reg        valid_s1c_p3;
+
+    // Side-channel pipeline stage 4 + DSP output truncation (aligns with DSP PREG output)
+    //
+    // BUG FIX #30: DSP48E1 with AREG=1, MREG=1, PREG=1 has 3 internal pipeline
+    // stages PLUS 1 fabric input register = 4 total cycles from diff_mod_s1b to
+    // dsp1c_p_out:
+    //   Cycle N:   dsp1c_a_in <= diff_mod_s1b  (fabric input register)
+    //   Cycle N+1: DSP AREG latches A/B
+    //   Cycle N+2: DSP MREG latches A*B
+    //   Cycle N+3: DSP PREG latches result → dsp1c_p_out valid
+    //
+    // The original code had only 3 side-channel pipeline stages (p2, p3 in the
+    // same always block as coeff_raw_s1c), making valid_s1c arrive 1 cycle EARLY
+    // relative to coeff_raw_s1c. Stage 1d then computed coeff_raw_s1c % P_M2
+    // using the PREVIOUS cycle's coeff_raw_s1c value, producing wrong results.
+    //
+    // FIX: Add a 4th side-channel pipeline stage (p3) so that valid_s1c is
+    // registered in the SAME always block as coeff_raw_s1c (both at Cycle N+3).
+    // This ensures valid_s1c and coeff_raw_s1c are always time-aligned.
+    //
+    // v2.12 BIT-WIDTH FIX: coeff_raw_s1c reduced from 36-bit to 14-bit.
+    //   diff_mod(<=255) * P_INV(<=56) = 14,280 < 2^14 → bits [47:14] always 0.
+    (* dont_touch = "true", max_fanout = 16 *) reg [13:0] coeff_raw_s1c;
     (* dont_touch = "true" *) reg [8:0]  ri_s1c;
     (* dont_touch = "true" *) reg [8:0]  r0_s1c, r1_s1c, r2_s1c, r3_s1c, r4_s1c, r5_s1c;
     (* dont_touch = "true" *) reg        valid_s1c;
 
-    // Three-stage always block: AREG -> MREG (48-bit) -> truncate
-    // Vivado maps: dsp_a_1c (AREG=1) -> multiply -> mult_res_1c_full (MREG=1)
-    // coeff_raw_s1c is an external FF that slices [35:0] from the 48-bit MREG output.
+    // Stage 2 always block (Cycle N+1): side-channel propagation from pre to p2.
+    // BUG FIX #32: When Bug #31 separated Stage 3(p3) and Stage 4 into independent
+    // always blocks, the Stage 2(p2) update logic was accidentally removed from the
+    // original always block. This left ri_s1c_p2/valid_s1c_p2 with no driver,
+    // permanently stuck at 0, breaking the entire Stage 1c pipeline and causing
+    // dec_valid_a to never arrive (Watchdog timeout → all FAIL, Clk_sum=0).
+    // FIX: Add a dedicated always block for Stage 2(p2) update.
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            // AREG reset
-            dsp_a_1c       <= 18'd0;
-            ri_s1c_pre     <= 9'd0;
-            r0_s1c_pre <= 9'd0; r1_s1c_pre <= 9'd0; r2_s1c_pre <= 9'd0;
-            r3_s1c_pre <= 9'd0; r4_s1c_pre <= 9'd0; r5_s1c_pre <= 9'd0;
-            valid_s1c_pre  <= 1'b0;
-            // MREG reset (48-bit full precision)
-            mult_res_1c_full <= 48'd0;
-            ri_s1c_mid     <= 9'd0;
-            r0_s1c_mid <= 9'd0; r1_s1c_mid <= 9'd0; r2_s1c_mid <= 9'd0;
-            r3_s1c_mid <= 9'd0; r4_s1c_mid <= 9'd0; r5_s1c_mid <= 9'd0;
-            valid_s1c_mid  <= 1'b0;
-            // External truncation FF reset
-            coeff_raw_s1c  <= 36'd0;
-            ri_s1c         <= 9'd0;
+            ri_s1c_p2  <= 9'd0;
+            r0_s1c_p2 <= 9'd0; r1_s1c_p2 <= 9'd0; r2_s1c_p2 <= 9'd0;
+            r3_s1c_p2 <= 9'd0; r4_s1c_p2 <= 9'd0; r5_s1c_p2 <= 9'd0;
+            valid_s1c_p2 <= 1'b0;
+        end else begin
+            // Stage 2: propagate side-channel (Cycle N+1, aligns with DSP MREG)
+            ri_s1c_p2  <= ri_s1c_pre;
+            r0_s1c_p2 <= r0_s1c_pre; r1_s1c_p2 <= r1_s1c_pre; r2_s1c_p2 <= r2_s1c_pre;
+            r3_s1c_p2 <= r3_s1c_pre; r4_s1c_p2 <= r4_s1c_pre; r5_s1c_p2 <= r5_s1c_pre;
+            valid_s1c_p2 <= valid_s1c_pre;
+        end
+    end
+
+    // Stage 3 always block (Cycle N+2): side-channel only, SEPARATE from Stage 4.
+    // BUG FIX #31: Separating Stage 3 and Stage 4 into independent always blocks
+    // prevents Vivado from merging them into combinational logic.
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ri_s1c_p3  <= 9'd0;
+            r0_s1c_p3 <= 9'd0; r1_s1c_p3 <= 9'd0; r2_s1c_p3 <= 9'd0;
+            r3_s1c_p3 <= 9'd0; r4_s1c_p3 <= 9'd0; r5_s1c_p3 <= 9'd0;
+            valid_s1c_p3 <= 1'b0;
+        end else begin
+            // Stage 3: propagate side-channel (Cycle N+2, aligns with DSP MREG)
+            ri_s1c_p3  <= ri_s1c_p2;
+            r0_s1c_p3 <= r0_s1c_p2; r1_s1c_p3 <= r1_s1c_p2; r2_s1c_p3 <= r2_s1c_p2;
+            r3_s1c_p3 <= r3_s1c_p2; r4_s1c_p3 <= r4_s1c_p2; r5_s1c_p3 <= r5_s1c_p2;
+            valid_s1c_p3 <= valid_s1c_p2;
+        end
+    end
+
+    // Stage 4 always block (Cycle N+3): DSP PREG output + side-channel.
+    // SEPARATE from Stage 3 to ensure Vivado treats them as distinct clock cycles.
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            coeff_raw_s1c <= 14'd0;
+            ri_s1c        <= 9'd0;
             r0_s1c <= 9'd0; r1_s1c <= 9'd0; r2_s1c <= 9'd0;
             r3_s1c <= 9'd0; r4_s1c <= 9'd0; r5_s1c <= 9'd0;
-            valid_s1c      <= 1'b0;
+            valid_s1c     <= 1'b0;
         end else begin
-            // Stage 1c_pre: AREG -- latch 18-bit input aligned to DSP A-port
-            dsp_a_1c       <= diff_mod_s1b[17:0];  // explicit 18-bit alignment
-            ri_s1c_pre     <= ri_s1b;
-            r0_s1c_pre <= r0_s1b; r1_s1c_pre <= r1_s1b; r2_s1c_pre <= r2_s1b;
-            r3_s1c_pre <= r3_s1b; r4_s1c_pre <= r4_s1b; r5_s1c_pre <= r5_s1b;
-            valid_s1c_pre  <= valid_s1b;
-            // Stage 1c: MREG -- 48-bit full-precision multiply result (DSP P-port width)
-            // Vivado packs dsp_a_1c (AREG) and mult_res_1c_full (MREG) into DSP48E1
-            mult_res_1c_full <= {12'd0, dsp_a_1c} * P_INV; // zero-extend to 48-bit
-            ri_s1c_mid     <= ri_s1c_pre;
-            r0_s1c_mid <= r0_s1c_pre; r1_s1c_mid <= r1_s1c_pre; r2_s1c_mid <= r2_s1c_pre;
-            r3_s1c_mid <= r3_s1c_pre; r4_s1c_mid <= r4_s1c_pre; r5_s1c_mid <= r5_s1c_pre;
-            valid_s1c_mid  <= valid_s1c_pre;
-            // Stage 1c_post: External FF -- truncate 48-bit MREG to 36-bit
-            coeff_raw_s1c  <= mult_res_1c_full[35:0];
-            ri_s1c         <= ri_s1c_mid;
-            r0_s1c <= r0_s1c_mid; r1_s1c <= r1_s1c_mid; r2_s1c <= r2_s1c_mid;
-            r3_s1c <= r3_s1c_mid; r4_s1c <= r4_s1c_mid; r5_s1c <= r5_s1c_mid;
-            valid_s1c      <= valid_s1c_mid;
+            // Stage 4: truncate DSP PREG output to 14-bit (Cycle N+3)
+            // dsp1c_p_out is valid at Cycle N+3 (3 DSP pipeline stages after fabric reg).
+            // Side-channel signals are now at p3 (also Cycle N+3) → time-aligned ✅
+            coeff_raw_s1c <= dsp1c_p_out[13:0];  // Truncate 48-bit to 14-bit (lossless)
+            ri_s1c        <= ri_s1c_p3;
+            r0_s1c <= r0_s1c_p3; r1_s1c <= r1_s1c_p3; r2_s1c <= r2_s1c_p3;
+            r3_s1c <= r3_s1c_p3; r4_s1c <= r4_s1c_p3; r5_s1c <= r5_s1c_p3;
+            valid_s1c     <= valid_s1c_p3;
         end
     end
 
@@ -371,107 +680,330 @@ module decoder_channel_2nrm_param #(
     end
 
     // =========================================================================
-    // STAGE 1e: Final Multiply-Add ONLY
-    // Combinational: x_cand = ri_s1d + P_M1 * coeff_mod_s1d -> clamp
-    // Only ONE multiply + add + clamp.
+    // STAGE 1e: Manual DSP48E1 Instantiation (v2.11)
+    // Operation: x_cand = ri_s1d + P_M1 * coeff_mod_s1d  (MAC: P = C + A*B)
     //
-    // DSP OPTIMIZATION (v2.5):
-    //   (* use_dsp = "true" *) forces Vivado to map the P_M1 * coeff_mod_s1d
-    //   multiplication to a DSP48E1 hardware slice.
-    //   DSP48E1 also supports the post-multiply addition (P = A*B + C),
-    //   so the entire multiply-add may be absorbed into a single DSP slice.
-    //   Applied to the result wire so the attribute covers the multiply operator.
+    // DSP48E1 Pipeline (5 stages, 3 clock cycles from input to P output):
+    //   Cycle N:   A/B/C inputs sampled by fabric registers (pre-DSP)
+    //   Cycle N+1: AREG/BREG/CREG latch A/B/C inside DSP
+    //   Cycle N+2: MREG latches A*B product inside DSP
+    //   Cycle N+3: PREG latches C + A*B result inside DSP -> P output
+    //
+    // OPMODE = 7'b0110101: P = C + A * B (MAC mode)
+    //   Bits [6:4] = 011 -> Z mux selects C register
+    //   Bits [3:2] = 01  -> W mux selects M (multiplier output)
+    //   Bits [1:0] = 01  -> X mux selects M (multiplier output)
+    //   Actually: OPMODE[6:4]=011 (Z=C), OPMODE[3:2]=01 (W=M), OPMODE[1:0]=01 (X=M)
+    //   P = Z + W + X + Y = C + M + 0 + 0 = C + A*B
+    // ALUMODE = 4'b0000: Z + W + X + Y (standard addition)
     // =========================================================================
 
-    // --- Stage 1e: DSP AREG + CREG + PREG in ONE always block ---
-    // All three DSP registers (input A, input C, output P) are in the SAME
-    // always block so Vivado can clearly see the MAC pattern:
-    //   dsp_a_1e (AREG) + dsp_c_1e (CREG) -> MAC -> x_cand_16_s1e (PREG)
-    // and pack all three into DSP48E1 internal pipeline registers.
-    // --- Stage 1e: DSP48E1 AREG + CREG + PREG (full-precision 48-bit intermediate) ---
-    // KEY FIX (v2.7b): Use 48-bit full-precision intermediate register mac_res_1e_full
-    // to match DSP48E1 native P-port width (48-bit). Vivado can then map:
-    //   dsp_a_1e [17:0]      -> DSP A-port (18-bit) -> AREG=1
-    //   dsp_c_1e [47:0]      -> DSP C-port (48-bit) -> CREG=1
-    //   mac_res_1e_full[47:0] -> DSP P-port (48-bit) -> PREG=1
-    // Truncation to x_cand_16_s1e [15:0] happens AFTER PREG (external FF).
-    // Without full-precision intermediate, Vivado sees width mismatch and
-    // falls back to LUT implementation (AREG=0, CREG=0, PREG=0).
-    (* dont_touch = "true" *) reg [17:0] dsp_a_1e;         // DSP AREG (18-bit A-port: coeff_mod)
-    (* dont_touch = "true" *) reg [47:0] dsp_c_1e;         // DSP CREG (48-bit C-port: ri zero-extended)
+    // --- Stage 1e: Fabric input registers (feed into DSP A/B/C ports) ---
+    (* dont_touch = "true" *) reg [24:0] dsp1e_a_in;  // 25-bit A-port (coeff_mod, zero-extended)
+    (* dont_touch = "true" *) reg [17:0] dsp1e_b_in;  // 18-bit B-port (P_M1)
+    (* dont_touch = "true" *) reg [47:0] dsp1e_c_in;  // 48-bit C-port (ri, zero-extended)
     (* dont_touch = "true" *) reg [8:0]  r0_s1e_pre, r1_s1e_pre, r2_s1e_pre;
     (* dont_touch = "true" *) reg [8:0]  r3_s1e_pre, r4_s1e_pre, r5_s1e_pre;
     (* dont_touch = "true" *) reg        valid_s1e_pre;
 
-    (* dont_touch = "true" *) reg [47:0] mac_res_1e_full;  // DSP PREG (48-bit P-port)
-    (* dont_touch = "true" *) reg [8:0]  r0_s1e_mid, r1_s1e_mid, r2_s1e_mid;
-    (* dont_touch = "true" *) reg [8:0]  r3_s1e_mid, r4_s1e_mid, r5_s1e_mid;
-    (* dont_touch = "true" *) reg        valid_s1e_mid;
-
-    (* dont_touch = "true" *) reg [15:0] x_cand_16_s1e;   // External FF (truncation)
-    (* dont_touch = "true" *) reg [8:0]  r0_s1e, r1_s1e, r2_s1e, r3_s1e, r4_s1e, r5_s1e;
-    (* dont_touch = "true" *) reg        valid_s1e;
-
-    // Three-stage always block: AREG+CREG -> PREG (48-bit) -> truncate
-    // Vivado maps: dsp_a_1e (AREG=1), dsp_c_1e (CREG=1) -> MAC -> mac_res_1e_full (PREG=1)
-    // x_cand_16_s1e is an external FF that slices [15:0] from the 48-bit PREG output.
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            // AREG + CREG reset
-            dsp_a_1e      <= 18'd0;
-            dsp_c_1e      <= 48'd0;
+            dsp1e_a_in    <= 25'd0;
+            dsp1e_b_in    <= 18'd0;
+            dsp1e_c_in    <= 48'd0;
             r0_s1e_pre <= 9'd0; r1_s1e_pre <= 9'd0; r2_s1e_pre <= 9'd0;
             r3_s1e_pre <= 9'd0; r4_s1e_pre <= 9'd0; r5_s1e_pre <= 9'd0;
             valid_s1e_pre <= 1'b0;
-            // PREG reset (48-bit full precision)
-            mac_res_1e_full <= 48'd0;
-            r0_s1e_mid <= 9'd0; r1_s1e_mid <= 9'd0; r2_s1e_mid <= 9'd0;
-            r3_s1e_mid <= 9'd0; r4_s1e_mid <= 9'd0; r5_s1e_mid <= 9'd0;
-            valid_s1e_mid <= 1'b0;
-            // External truncation FF reset
+        end else begin
+            // Zero-extend 18-bit coeff_mod_s1d to 25-bit DSP A-port
+            dsp1e_a_in    <= {7'd0, coeff_mod_s1d[17:0]};
+            // P_M1 loaded into 18-bit DSP B-port
+            dsp1e_b_in    <= P_M1[17:0];
+            // Zero-extend 9-bit ri_s1d to 48-bit DSP C-port
+            dsp1e_c_in    <= {39'd0, ri_s1d};
+            r0_s1e_pre <= r0_s1d; r1_s1e_pre <= r1_s1d; r2_s1e_pre <= r2_s1d;
+            r3_s1e_pre <= r3_s1d; r4_s1e_pre <= r4_s1d; r5_s1e_pre <= r5_s1d;
+            valid_s1e_pre <= valid_s1d;
+        end
+    end
+
+    // --- Stage 1e: DSP48E1 output wire ---
+    wire [47:0] dsp1e_p_out;  // 48-bit P output from DSP48E1 (ri + P_M1 * coeff_mod)
+
+    // --- Stage 1e: Manual DSP48E1 instantiation (MAC mode) ---
+    // AREG=1, BREG=1, CREG=1: latch A/B/C inputs inside DSP (1 cycle)
+    // MREG=1: latch multiplier output inside DSP (1 cycle)
+    // PREG=1: latch final result (C + A*B) inside DSP (1 cycle)
+    // Total DSP internal pipeline: 3 cycles (AREG/CREG -> MREG -> PREG)
+    DSP48E1 #(
+        // Feature control
+        .USE_MULT    ("MULTIPLY"),  // Use multiplier
+        .USE_SIMD    ("ONE48"),     // Single 48-bit operation
+        .USE_DPORT   ("FALSE"),     // No D-port pre-adder
+        // Pipeline register configuration (KEY: all enabled)
+        .AREG        (1),           // 1 pipeline register on A input -> AREG
+        .BREG        (1),           // 1 pipeline register on B input -> BREG
+        .CREG        (1),           // 1 pipeline register on C input -> CREG
+        .DREG        (1),           // D register (tied off)
+        .MREG        (1),           // 1 pipeline register on multiplier output -> MREG
+        .PREG        (1),           // 1 pipeline register on P output -> PREG
+        .ADREG       (1),           // A+D pre-adder register
+        .ACASCREG    (1),           // Cascade register matches AREG
+        .BCASCREG    (1),           // Cascade register matches BREG
+        // Data width
+        .A_INPUT     ("DIRECT"),    // A input from fabric (not cascade)
+        .B_INPUT     ("DIRECT"),    // B input from fabric (not cascade)
+        // Initialization
+        .AUTORESET_PATDET("NO_RESET"),
+        .MASK        (48'h3fffffffffff),
+        .PATTERN     (48'h000000000000),
+        .SEL_MASK    ("MASK"),
+        .SEL_PATTERN ("PATTERN"),
+        .USE_PATTERN_DETECT("NO_PATDET")
+    ) u_dsp_1e (
+        .CLK         (clk),
+        // Control signals
+        // OPMODE[6:4]=011: Z mux = C register
+        // OPMODE[3:2]=01:  W mux = M (multiplier output)
+        // OPMODE[1:0]=01:  X mux = M (multiplier output)
+        // Result: P = C + A*B (MAC operation)
+        .OPMODE      (7'b0110101),  // P = C + A * B
+        .ALUMODE     (4'b0000),     // Z + W + X + Y (standard add)
+        .CARRYINSEL  (3'b000),
+        // Clock enables (all enabled) — standard DSP48E1 CE ports
+        // CEAD: CE for A+D pre-adder register (ADREG). USE_DPORT=FALSE so ADREG is
+        //       bypassed and CEAD has no functional effect, but must be connected to
+        //       avoid [Synth 8-7071] unconnected port warning.
+        .CEA1        (1'b1), .CEA2        (1'b1),
+        .CEB1        (1'b1), .CEB2        (1'b1),
+        .CEC         (1'b1), .CED         (1'b1),
+        .CEM         (1'b1), .CEP         (1'b1),
+        .CECTRL      (1'b1), .CEINMODE    (1'b1),
+        .CEAD        (1'b1),         // CE for ADREG (USE_DPORT=FALSE, no functional effect)
+        // Synchronous resets (active high, tied low)
+        .RSTA        (1'b0), .RSTB        (1'b0),
+        .RSTC        (1'b0), .RSTD        (1'b0),
+        .RSTM        (1'b0), .RSTP        (1'b0),
+        .RSTALLCARRYIN(1'b0), .RSTALUMODE (1'b0),
+        .RSTCTRL     (1'b0), .RSTINMODE   (1'b0),
+        // Data inputs
+        .A           (dsp1e_a_in),  // 25-bit A input (zero-extended coeff_mod)
+        .B           (dsp1e_b_in),  // 18-bit B input (P_M1)
+        .C           (dsp1e_c_in),  // 48-bit C input (zero-extended ri)
+        .D           (25'd0),       // D not used (USE_DPORT=FALSE)
+        .CARRYIN     (1'b0),
+        .INMODE      (5'b00000),    // Standard mode: A2->A, B2->B
+        // Cascade inputs (not used)
+        .ACIN        (30'd0), .BCIN        (18'd0),
+        .PCIN        (48'd0), .CARRYCASCIN (1'b0),
+        .MULTSIGNIN  (1'b0),
+        // Outputs
+        .P           (dsp1e_p_out), // 48-bit result: ri + P_M1 * coeff_mod
+        // Unused outputs
+        .ACOUT       (), .BCOUT       (),
+        .PCOUT       (), .CARRYCASCOUT(),
+        .MULTSIGNOUT (), .OVERFLOW    (),
+        .UNDERFLOW   (), .PATTERNDETECT(),
+        .PATTERNBDETECT(), .CARRYOUT  ()
+    );
+
+    // --- Stage 1e: Output pipeline registers (after DSP PREG) ---
+    // DSP pipeline adds 3 cycles (AREG/CREG + MREG + PREG).
+    // Side-channel signals need 3 additional pipeline stages to stay aligned.
+    // We already have 1 stage (dsp1e_a_in block above), so we need 2 more here.
+
+    // Side-channel pipeline stage 2 (aligns with DSP MREG output)
+    (* dont_touch = "true" *) reg [8:0]  r0_s1e_p2, r1_s1e_p2, r2_s1e_p2;
+    (* dont_touch = "true" *) reg [8:0]  r3_s1e_p2, r4_s1e_p2, r5_s1e_p2;
+    (* dont_touch = "true" *) reg        valid_s1e_p2;
+
+    // Side-channel pipeline stage 3 (aligns with DSP MREG output, Cycle N+2)
+    // NOTE: This stage propagates side-channel signals only.
+    //       x_cand_16_s1e is NOT latched here — it comes from DSP PREG (Cycle N+3).
+    (* dont_touch = "true" *) reg [8:0]  r0_s1e_p3, r1_s1e_p3, r2_s1e_p3;
+    (* dont_touch = "true" *) reg [8:0]  r3_s1e_p3, r4_s1e_p3, r5_s1e_p3;
+    (* dont_touch = "true" *) reg        valid_s1e_p3;
+
+    // Side-channel pipeline stage 4 + DSP output clamp (aligns with DSP PREG output)
+    //
+    // BUG FIX #30 (Stage 1e): Same issue as Stage 1c.
+    // DSP48E1 with AREG=1, BREG=1, CREG=1, MREG=1, PREG=1 has 3 internal pipeline
+    // stages PLUS 1 fabric input register = 4 total cycles from coeff_mod_s1d to
+    // dsp1e_p_out:
+    //   Cycle N:   dsp1e_a_in <= coeff_mod_s1d  (fabric input register)
+    //   Cycle N+1: DSP AREG/BREG/CREG latches A/B/C
+    //   Cycle N+2: DSP MREG latches A*B
+    //   Cycle N+3: DSP PREG latches C + A*B → dsp1e_p_out valid
+    //
+    // The original code had only 3 side-channel pipeline stages (p2, p3 in the
+    // same always block as x_cand_16_s1e), making valid_s1e arrive 1 cycle EARLY
+    // relative to x_cand_16_s1e. Stage 2a then computed x_cand_16_s1e % 257/256
+    // using the PREVIOUS cycle's x_cand_16_s1e value, producing wrong results.
+    //
+    // FIX: Add a 4th side-channel pipeline stage (p3) so that valid_s1e is
+    // registered in the SAME always block as x_cand_16_s1e (both at Cycle N+3).
+    //
+    // v2.15 FANOUT FIX: x_cand_16_s1e uses max_fanout=8 (not dont_touch) to allow
+    // Vivado to replicate the register and reduce route delay.
+    (* max_fanout = 8 *) reg [15:0] x_cand_16_s1e;
+    (* dont_touch = "true" *) reg [8:0]  r0_s1e, r1_s1e, r2_s1e, r3_s1e, r4_s1e, r5_s1e;
+    (* dont_touch = "true" *) reg        valid_s1e;
+
+    // Stage 1e: Stage 2 always block (Cycle N+1)
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            r0_s1e_p2 <= 9'd0; r1_s1e_p2 <= 9'd0; r2_s1e_p2 <= 9'd0;
+            r3_s1e_p2 <= 9'd0; r4_s1e_p2 <= 9'd0; r5_s1e_p2 <= 9'd0;
+            valid_s1e_p2 <= 1'b0;
+        end else begin
+            // Stage 2: propagate side-channel (Cycle N+1, aligns with DSP MREG)
+            r0_s1e_p2 <= r0_s1e_pre; r1_s1e_p2 <= r1_s1e_pre; r2_s1e_p2 <= r2_s1e_pre;
+            r3_s1e_p2 <= r3_s1e_pre; r4_s1e_p2 <= r4_s1e_pre; r5_s1e_p2 <= r5_s1e_pre;
+            valid_s1e_p2 <= valid_s1e_pre;
+        end
+    end
+
+    // Stage 1e: Stage 3 always block (Cycle N+2): side-channel only, SEPARATE from Stage 4.
+    // BUG FIX #31 (Stage 1e): Same fix as Stage 1c — separate always blocks prevent
+    // Vivado from merging the NBA chain into a single-cycle path.
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            r0_s1e_p3 <= 9'd0; r1_s1e_p3 <= 9'd0; r2_s1e_p3 <= 9'd0;
+            r3_s1e_p3 <= 9'd0; r4_s1e_p3 <= 9'd0; r5_s1e_p3 <= 9'd0;
+            valid_s1e_p3 <= 1'b0;
+        end else begin
+            // Stage 3: propagate side-channel (Cycle N+2, aligns with DSP MREG)
+            r0_s1e_p3 <= r0_s1e_p2; r1_s1e_p3 <= r1_s1e_p2; r2_s1e_p3 <= r2_s1e_p2;
+            r3_s1e_p3 <= r3_s1e_p2; r4_s1e_p3 <= r4_s1e_p2; r5_s1e_p3 <= r5_s1e_p2;
+            valid_s1e_p3 <= valid_s1e_p2;
+        end
+    end
+
+    // Stage 1e: Stage 4 always block (Cycle N+3): DSP PREG output + side-channel.
+    // SEPARATE from Stage 3 to ensure Vivado treats them as distinct clock cycles.
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
             x_cand_16_s1e <= 16'd0;
             r0_s1e <= 9'd0; r1_s1e <= 9'd0; r2_s1e <= 9'd0;
             r3_s1e <= 9'd0; r4_s1e <= 9'd0; r5_s1e <= 9'd0;
             valid_s1e     <= 1'b0;
         end else begin
-            // Stage 1e_pre: AREG + CREG -- latch inputs aligned to DSP port widths
-            dsp_a_1e      <= coeff_mod_s1d[17:0];       // AREG: 18-bit A-port
-            dsp_c_1e      <= {39'd0, ri_s1d};           // CREG: 48-bit C-port (zero-extend 9-bit ri)
-            r0_s1e_pre <= r0_s1d; r1_s1e_pre <= r1_s1d; r2_s1e_pre <= r2_s1d;
-            r3_s1e_pre <= r3_s1d; r4_s1e_pre <= r4_s1d; r5_s1e_pre <= r5_s1d;
-            valid_s1e_pre <= valid_s1d;
-            // Stage 1e: PREG -- 48-bit full-precision MAC result (DSP P-port width)
-            // Vivado packs dsp_a_1e (AREG), dsp_c_1e (CREG), mac_res_1e_full (PREG) into DSP48E1
-            mac_res_1e_full <= dsp_c_1e + ({30'd0, dsp_a_1e} * P_M1); // C + A*B, 48-bit
-            r0_s1e_mid <= r0_s1e_pre; r1_s1e_mid <= r1_s1e_pre; r2_s1e_mid <= r2_s1e_pre;
-            r3_s1e_mid <= r3_s1e_pre; r4_s1e_mid <= r4_s1e_pre; r5_s1e_mid <= r5_s1e_pre;
-            valid_s1e_mid <= valid_s1e_pre;
-            // Stage 1e_post: External FF -- truncate 48-bit PREG to 16-bit with clamp
-            x_cand_16_s1e <= (mac_res_1e_full > 48'd65535) ? 16'hFFFF : mac_res_1e_full[15:0];
-            r0_s1e <= r0_s1e_mid; r1_s1e <= r1_s1e_mid; r2_s1e <= r2_s1e_mid;
-            r3_s1e <= r3_s1e_mid; r4_s1e <= r4_s1e_mid; r5_s1e <= r5_s1e_mid;
-            valid_s1e     <= valid_s1e_mid;
+            // Stage 4: clamp DSP PREG output to 16-bit (Cycle N+3)
+            // dsp1e_p_out is valid at Cycle N+3 (3 DSP pipeline stages after fabric reg).
+            // Side-channel signals are now at p3 (also Cycle N+3) → time-aligned ✅
+            x_cand_16_s1e <= (dsp1e_p_out > 48'd65535) ? 16'hFFFF : dsp1e_p_out[15:0];
+            r0_s1e <= r0_s1e_p3; r1_s1e <= r1_s1e_p3; r2_s1e <= r2_s1e_p3;
+            r3_s1e <= r3_s1e_p3; r4_s1e <= r4_s1e_p3; r5_s1e <= r5_s1e_p3;
+            valid_s1e     <= valid_s1e_p3;
         end
     end
 
     // =========================================================================
-    // STAGE 2: Modular Residue Computation
-    // Compute x_cand_16_s1d % each of the 6 moduli (combinatorial).
-    // All 6 operations are independent and execute in parallel.
-    // Each constant-modulo operation synthesizes to ~8-10 LUT levels.
+    // STAGE 2a: Modular Residue Computation — Group 1 (v2.16)
+    // Compute x_cand_16_s1e % {257, 256} (2 moduli, parallel).
+    //
+    // v2.16 THREE-WAY SPLIT: Stage 2 is now split into 3 sub-stages (2+2+2).
+    // v2.15 used 3+3 but each sub-stage still had ~8 CARRY4 per modulo (~5.8ns).
+    // With 2 moduli per sub-stage, the critical path is ~4-5 CARRY4 (~2.5ns).
+    //
+    // Stage 2a: % 257, % 256 -> cand_r_s2a[0..1]
+    //   Forward x_cand_16_s2a (max_fanout=8) and recv_r_s2a for downstream stages.
     // =========================================================================
 
-    // NOTE: Stage 2 reads from Stage 1e outputs (x_cand_16_s1e, r*_s1e, valid_s1e)
-    wire [8:0] cand_r_comb [0:5];
-    assign cand_r_comb[0] = x_cand_16_s1e % 9'd257;
-    assign cand_r_comb[1] = x_cand_16_s1e % 9'd256;
-    assign cand_r_comb[2] = x_cand_16_s1e % 9'd61;
-    assign cand_r_comb[3] = x_cand_16_s1e % 9'd59;
-    assign cand_r_comb[4] = x_cand_16_s1e % 9'd55;
-    assign cand_r_comb[5] = x_cand_16_s1e % 9'd53;
+    // Stage 2a combinational: first 2 modulo operations
+    wire [8:0] cand_r_comb_a [0:1];
+    assign cand_r_comb_a[0] = x_cand_16_s1e % 9'd257;
+    assign cand_r_comb_a[1] = x_cand_16_s1e % 9'd256;
 
-    // --- Stage 2 pipeline registers ---
-    reg [8:0]  cand_r_s2 [0:5];  // Candidate residues (computed)
+    // Stage 2a pipeline registers
+    (* dont_touch = "true" *) reg [8:0]  cand_r_s2a [0:1];  // Partial residues (% 257/256)
+    (* dont_touch = "true" *) reg [8:0]  recv_r_s2a [0:5];  // All received residues (forwarded)
+    // v2.16: max_fanout=8 allows Vivado to replicate x_cand_16_s2a to reduce route delay
+    (* max_fanout = 8 *) reg [15:0] x_cand_16_s2a;          // x_cand_16 forwarded to Stage 2b
+    (* dont_touch = "true" *) reg        valid_s2a;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            cand_r_s2a[0] <= 9'd0; cand_r_s2a[1] <= 9'd0;
+            recv_r_s2a[0] <= 9'd0; recv_r_s2a[1] <= 9'd0; recv_r_s2a[2] <= 9'd0;
+            recv_r_s2a[3] <= 9'd0; recv_r_s2a[4] <= 9'd0; recv_r_s2a[5] <= 9'd0;
+            x_cand_16_s2a <= 16'd0;
+            valid_s2a     <= 1'b0;
+        end else begin
+            valid_s2a     <= valid_s1e;
+            x_cand_16_s2a <= x_cand_16_s1e;
+            cand_r_s2a[0] <= cand_r_comb_a[0];
+            cand_r_s2a[1] <= cand_r_comb_a[1];
+            recv_r_s2a[0] <= r0_s1e;
+            recv_r_s2a[1] <= r1_s1e;
+            recv_r_s2a[2] <= r2_s1e;
+            recv_r_s2a[3] <= r3_s1e;
+            recv_r_s2a[4] <= r4_s1e;
+            recv_r_s2a[5] <= r5_s1e;
+        end
+    end
+
+    // =========================================================================
+    // STAGE 2b: Modular Residue Computation — Group 2 (v2.16)
+    // Compute x_cand_16_s2a % {61, 59} (2 moduli, parallel).
+    //
+    // Stage 2b: % 61, % 59 -> cand_r_s2b[2..3]
+    //   Forward x_cand_16_s2b (max_fanout=8) and cand_r_s2a/recv_r_s2b for Stage 2c.
+    // =========================================================================
+
+    // Stage 2b combinational: second 2 modulo operations
+    wire [8:0] cand_r_comb_b [2:3];
+    assign cand_r_comb_b[2] = x_cand_16_s2a % 9'd61;
+    assign cand_r_comb_b[3] = x_cand_16_s2a % 9'd59;
+
+    // Stage 2b pipeline registers
+    (* dont_touch = "true" *) reg [8:0]  cand_r_s2b [0:3];  // Partial residues (% 257/256/61/59)
+    (* dont_touch = "true" *) reg [8:0]  recv_r_s2b [0:5];  // All received residues (forwarded)
+    // v2.16: max_fanout=8 allows Vivado to replicate x_cand_16_s2b to reduce route delay
+    (* max_fanout = 8 *) reg [15:0] x_cand_16_s2b;          // x_cand_16 forwarded to Stage 2c
+    (* dont_touch = "true" *) reg        valid_s2b;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            cand_r_s2b[0] <= 9'd0; cand_r_s2b[1] <= 9'd0;
+            cand_r_s2b[2] <= 9'd0; cand_r_s2b[3] <= 9'd0;
+            recv_r_s2b[0] <= 9'd0; recv_r_s2b[1] <= 9'd0; recv_r_s2b[2] <= 9'd0;
+            recv_r_s2b[3] <= 9'd0; recv_r_s2b[4] <= 9'd0; recv_r_s2b[5] <= 9'd0;
+            x_cand_16_s2b <= 16'd0;
+            valid_s2b     <= 1'b0;
+        end else begin
+            valid_s2b     <= valid_s2a;
+            x_cand_16_s2b <= x_cand_16_s2a;
+            cand_r_s2b[0] <= cand_r_s2a[0];       // % 257 (from Stage 2a)
+            cand_r_s2b[1] <= cand_r_s2a[1];       // % 256 (from Stage 2a)
+            cand_r_s2b[2] <= cand_r_comb_b[2];    // % 61  (computed this cycle)
+            cand_r_s2b[3] <= cand_r_comb_b[3];    // % 59  (computed this cycle)
+            recv_r_s2b[0] <= recv_r_s2a[0];
+            recv_r_s2b[1] <= recv_r_s2a[1];
+            recv_r_s2b[2] <= recv_r_s2a[2];
+            recv_r_s2b[3] <= recv_r_s2a[3];
+            recv_r_s2b[4] <= recv_r_s2a[4];
+            recv_r_s2b[5] <= recv_r_s2a[5];
+        end
+    end
+
+    // =========================================================================
+    // STAGE 2c: Modular Residue Computation — Group 3 (v2.16)
+    // Compute x_cand_16_s2b % {55, 53} (2 moduli, parallel).
+    // Merge with cand_r_s2b[0..3] into final cand_r_s2[0..5].
+    //
+    // Total Stage 2 latency: 3 cycles (Stage 2a + 2b + 2c).
+    // Total decoder latency increases by 1 more cycle (absorbed by DEC_WAIT).
+    // This fix applies uniformly to all 15 channels (shared module).
+    // =========================================================================
+
+    // Stage 2c combinational: third 2 modulo operations
+    wire [8:0] cand_r_comb_c [4:5];
+    assign cand_r_comb_c[4] = x_cand_16_s2b % 9'd55;
+    assign cand_r_comb_c[5] = x_cand_16_s2b % 9'd53;
+
+    // Stage 2c pipeline registers (final Stage 2 output)
+    reg [8:0]  cand_r_s2 [0:5];  // All 6 candidate residues (merged from 2a + 2b + 2c)
     reg [8:0]  recv_r_s2 [0:5];  // Received residues (time-aligned)
     reg [15:0] x_cand_16_s2;     // Carry x_cand_16 forward for final output
     reg        valid_s2;
@@ -487,20 +1019,21 @@ module decoder_channel_2nrm_param #(
             x_cand_16_s2 <= 16'd0;
             valid_s2     <= 1'b0;
         end else begin
-            valid_s2     <= valid_s1e;          // Follow Stage 1e valid
-            x_cand_16_s2 <= x_cand_16_s1e;     // Use Stage 1e candidate value
-            cand_r_s2[0] <= cand_r_comb[0];
-            cand_r_s2[1] <= cand_r_comb[1];
-            cand_r_s2[2] <= cand_r_comb[2];
-            cand_r_s2[3] <= cand_r_comb[3];
-            cand_r_s2[4] <= cand_r_comb[4];
-            cand_r_s2[5] <= cand_r_comb[5];
-            recv_r_s2[0] <= r0_s1e;             // Use Stage 1e residues (time-aligned)
-            recv_r_s2[1] <= r1_s1e;
-            recv_r_s2[2] <= r2_s1e;
-            recv_r_s2[3] <= r3_s1e;
-            recv_r_s2[4] <= r4_s1e;
-            recv_r_s2[5] <= r5_s1e;
+            valid_s2     <= valid_s2b;
+            x_cand_16_s2 <= x_cand_16_s2b;
+            // Merge all results: Stage 2a (% 257/256) + Stage 2b (% 61/59) + Stage 2c (% 55/53)
+            cand_r_s2[0] <= cand_r_s2b[0];       // % 257 (from Stage 2b, originally 2a)
+            cand_r_s2[1] <= cand_r_s2b[1];       // % 256 (from Stage 2b, originally 2a)
+            cand_r_s2[2] <= cand_r_s2b[2];       // % 61  (from Stage 2b)
+            cand_r_s2[3] <= cand_r_s2b[3];       // % 59  (from Stage 2b)
+            cand_r_s2[4] <= cand_r_comb_c[4];    // % 55  (computed this cycle)
+            cand_r_s2[5] <= cand_r_comb_c[5];    // % 53  (computed this cycle)
+            recv_r_s2[0] <= recv_r_s2b[0];
+            recv_r_s2[1] <= recv_r_s2b[1];
+            recv_r_s2[2] <= recv_r_s2b[2];
+            recv_r_s2[3] <= recv_r_s2b[3];
+            recv_r_s2[4] <= recv_r_s2b[4];
+            recv_r_s2[5] <= recv_r_s2b[5];
         end
     end
 
@@ -742,54 +1275,99 @@ module decoder_2nrm (
               .x_out(ch_x[14]), .distance(ch_dist[14]), .valid(ch_valid[14]));
 
     // =========================================================================
-    // 3. MLD: Select Channel with Minimum Hamming Distance
+    // 3. MLD Stage A: Two Parallel Partial Minimum Finders (v2.13)
     // =========================================================================
-    // Triggered when ch_valid[0] is HIGH (all 15 channels complete simultaneously
-    // because they all receive the same start_r pulse and have identical 6-cycle latency).
-    // This combinational tree operates on registered ch_dist/ch_x values (Stage 3 outputs),
-    // so its path is: ch_dist_reg -> 15-way compare tree -> output register.
-    // The 15-way minimum tree is approximately 4 LUT levels deep (log2(15)~4),
-    // well within the 10 ns budget.
+    // v2.12 used a single for-loop over all 15 channels. Verilog for-loop
+    // sequential semantics forced Vivado to synthesize a 15-level serial
+    // priority chain (ch0->ch1->...->ch14), causing 10.313ns route delay.
     //
-    // Tie-breaking: lower channel index wins (deterministic behavior)
+    // v2.13 FIX: Split into two independent for-loops:
+    //   Group A: ch0~ch7  (8 channels) -> partial minimum mid_dist_a / mid_x_a
+    //   Group B: ch8~ch14 (7 channels) -> partial minimum mid_dist_b / mid_x_b
+    // Each loop is at most 8 levels deep -> route delay ~4-5ns per group.
+    // Results are registered (mid_*_reg) to break the combinational path.
+    //
+    // Tie-breaking: lower channel index wins (ch0 < ch1 < ... < ch14).
+    // Group A always wins ties against Group B (ch0~ch7 < ch8~ch14).
+    //
+    // Latency: +1 cycle vs v2.12 (MLD now takes 2 cycles instead of 1).
+    // Total decoder latency: 1(input) + 6(channel) + 2(MLD) = 9 cycles.
+    // auto_scan_engine DEC_WAIT polls dec_valid -> absorbed automatically.
 
-    // Combinational minimum distance tree
-    reg [3:0]  min_dist_comb;
-    reg [15:0] best_x_comb;
-    integer k;
+    // --- MLD Stage A: Combinational partial minimums ---
+    reg [3:0]  mid_dist_a_comb, mid_dist_b_comb;
+    reg [15:0] mid_x_a_comb,    mid_x_b_comb;
+    reg        mid_valid_comb;
+    integer    j;
 
     always @(*) begin
-        min_dist_comb = 4'd6; // Initialize to impossible max (6 moduli)
-        best_x_comb   = 16'd0;
-        for (k = 0; k < 15; k = k + 1) begin
-            if (ch_dist[k] < min_dist_comb) begin
-                min_dist_comb = ch_dist[k];
-                best_x_comb   = ch_x[k];
+        // Group A: ch0~ch7
+        mid_dist_a_comb = 4'd6;
+        mid_x_a_comb    = 16'd0;
+        for (j = 0; j <= 7; j = j + 1) begin
+            if (ch_dist[j] < mid_dist_a_comb) begin
+                mid_dist_a_comb = ch_dist[j];
+                mid_x_a_comb    = ch_x[j];
             end
+        end
+        // Group B: ch8~ch14
+        mid_dist_b_comb = 4'd6;
+        mid_x_b_comb    = 16'd0;
+        for (j = 8; j <= 14; j = j + 1) begin
+            if (ch_dist[j] < mid_dist_b_comb) begin
+                mid_dist_b_comb = ch_dist[j];
+                mid_x_b_comb    = ch_x[j];
+            end
+        end
+        mid_valid_comb = ch_valid[0];
+    end
+
+    // --- MLD Stage A: Pipeline registers (break combinational path) ---
+    (* dont_touch = "true" *) reg [3:0]  mid_dist_a_reg, mid_dist_b_reg;
+    (* dont_touch = "true" *) reg [15:0] mid_x_a_reg,    mid_x_b_reg;
+    (* dont_touch = "true" *) reg        mid_valid_reg;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            mid_dist_a_reg <= 4'd6;
+            mid_dist_b_reg <= 4'd6;
+            mid_x_a_reg    <= 16'd0;
+            mid_x_b_reg    <= 16'd0;
+            mid_valid_reg  <= 1'b0;
+        end else begin
+            mid_dist_a_reg <= mid_dist_a_comb;
+            mid_dist_b_reg <= mid_dist_b_comb;
+            mid_x_a_reg    <= mid_x_a_comb;
+            mid_x_b_reg    <= mid_x_b_comb;
+            mid_valid_reg  <= mid_valid_comb;
         end
     end
 
     // =========================================================================
-    // 4. Sequential Output Register (Cycle 8 -- MLD stage)
+    // 4. MLD Stage B + Output Register (v2.13)
     // =========================================================================
-    // ch_valid[0] is the Stage-3 registered valid from channel 0.
-    // All 15 channels assert valid simultaneously (same start_r, same 6-cycle latency).
-    // Total latency: 1 (input reg) + 6 (channel pipeline) + 1 (this MLD reg) = 8 cycles.
+    // Final comparison: mid_a vs mid_b -> select global minimum.
+    // Group A wins ties (lower channel index priority).
+    // Combinational path: mid_dist_a_reg -> 1 compare -> data_out_reg (~2 LUT).
+    //
+    // Total latency: 1(input) + 6(channel) + 1(MLD-A) + 1(MLD-B/output) = 9 cycles.
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             data_out      <= 16'd0;
             valid         <= 1'b0;
             uncorrectable <= 1'b0;
         end else begin
-            // ch_valid[0] goes HIGH 6 cycles after start_r (Stage 3 output)
-            // This register adds cycle 8 (including input reg), making total latency = 8 cycles
-            valid <= ch_valid[0];
+            valid <= mid_valid_reg;
 
-            if (ch_valid[0]) begin
-                data_out <= best_x_comb;
-                // Uncorrectable if minimum distance exceeds error correction capability
-                // NRM_MAX_ERRORS = 2, so if min_dist > 2, correction is not reliable
-                uncorrectable <= (min_dist_comb > `NRM_MAX_ERRORS);
+            if (mid_valid_reg) begin
+                // Group A wins on tie (ch0~ch7 have lower index priority)
+                if (mid_dist_a_reg <= mid_dist_b_reg) begin
+                    data_out      <= mid_x_a_reg;
+                    uncorrectable <= (mid_dist_a_reg > `NRM_MAX_ERRORS);
+                end else begin
+                    data_out      <= mid_x_b_reg;
+                    uncorrectable <= (mid_dist_b_reg > `NRM_MAX_ERRORS);
+                end
             end else begin
                 uncorrectable <= 1'b0;
             end

@@ -120,7 +120,7 @@ module auto_scan_engine (
     // =========================================================================
     // 1. FSM State Register
     // =========================================================================
-    reg [2:0] state;
+    (* mark_debug = "true" *) reg [2:0] state;
     assign busy = (state != `ENG_STATE_IDLE);
 
     // =========================================================================
@@ -174,7 +174,7 @@ module auto_scan_engine (
     end
 
     // Injection decision: latched at CONFIG state
-    reg inject_en_latch; // Whether to inject in this trial
+    (* mark_debug = "true" *) reg inject_en_latch; // Whether to inject in this trial
 
     // =========================================================================
     // 3. PRBS Generator Instance
@@ -198,8 +198,8 @@ module auto_scan_engine (
     );
 
     // Latched PRBS output (stable for downstream pipeline)
-    reg [15:0] sym_a_latch; // Symbol A = prbs_out[31:16]
-    reg [15:0] sym_b_latch; // Symbol B = prbs_out[15:0]
+    (* mark_debug = "true" *) reg [15:0] sym_a_latch; // Symbol A = prbs_out[31:16]
+    (* mark_debug = "true" *) reg [15:0] sym_b_latch; // Symbol B = prbs_out[15:0]
 
     // =========================================================================
     // 4. Encoder Wrapper Instance
@@ -226,9 +226,39 @@ module auto_scan_engine (
     );
 
     // Latch encoder output (lower 64 bits contain the packed residues)
-    reg [63:0] enc_out_a_latch;
-    reg [63:0] enc_out_b_latch;
+    (* mark_debug = "true" *) reg [63:0] enc_out_a_latch;
+    (* mark_debug = "true" *) reg [63:0] enc_out_b_latch;
     reg [7:0]  cw_len_latch;
+
+    // BUG FIX: 1-cycle delay register for enc_done, used in ENC_WAIT state.
+    // encoder_wrapper latches codeword_A/B on enc_done=1 via NBA, so
+    // codeword_A/B are only valid one cycle AFTER enc_done=1.
+    // enc_done_d1 aligns the latch point with the valid codeword data.
+    reg        enc_done_d1;
+
+    // BUG FIX #33: 2-bit counter for INJ_WAIT state (replaces 1-bit inj_wait_done).
+    // error_injector_unit has 2-cycle pipeline latency from data_in stable to data_out valid:
+    //   Cycle N+0: inject_en=1, data_in=enc_out_a_latch stable
+    //              → inject_en_d1/data_in_d1 NBA (T+1 effective)
+    //              → BRAM ena=inject_en, BRAM starts reading (1-cycle BRAM latency)
+    //   Cycle N+1: inject_en_d1=1, data_in_d1=enc_out_a_latch (NBA settled)
+    //              → bram_dout valid (BRAM 1-cycle latency settled)
+    //              → data_out <= data_in_d1 ^ bram_dout (NBA, T+2 effective)
+    //   Cycle N+2: data_out valid ✅
+    //
+    // BUG #29 (INCOMPLETE FIX): The original fix used a 1-bit inj_wait_done flag,
+    // which only waited 2 cycles total (inj_wait_done: 0→1→latch). However, the
+    // injector needs 2 cycles from data_in stable to data_out valid, so the FSM
+    // must stay in INJ_WAIT for 3 cycles (cnt: 0→1→2→latch):
+    //   Cycle N+0 (cnt=0): injector pipeline starts, cnt → 1
+    //   Cycle N+1 (cnt=1): injector pipeline running, cnt → 2
+    //   Cycle N+2 (cnt=2): data_out valid, latch inj_out_a/b, cnt → 0
+    //
+    // FIX: Replace 1-bit inj_wait_done with 2-bit inj_wait_cnt counter.
+    // inj_wait_cnt=0: first cycle in INJ_WAIT (injector pipeline starting)
+    // inj_wait_cnt=1: second cycle in INJ_WAIT (injector pipeline running)
+    // inj_wait_cnt=2: third cycle in INJ_WAIT (inj_out_a/b now valid, latch them)
+    reg [1:0]  inj_wait_cnt;  // BUG FIX #33: was 1-bit inj_wait_done
 
     // =========================================================================
     // 5. Error Injector Unit Instances (Channel A and Channel B)
@@ -269,17 +299,17 @@ module auto_scan_engine (
     // =========================================================================
     // 6. Decoder Wrapper Instances (Channel A and Channel B)
     // =========================================================================
-    reg         dec_start;
-    wire [15:0] dec_out_a;
-    wire [15:0] dec_out_b;
-    wire        dec_valid_a;
-    wire        dec_valid_b;
-    wire        dec_uncorr_a;
-    wire        dec_uncorr_b;
+    (* mark_debug = "true" *) reg         dec_start;
+    (* mark_debug = "true" *) wire [15:0] dec_out_a;
+    (* mark_debug = "true" *) wire [15:0] dec_out_b;
+    (* mark_debug = "true" *) wire        dec_valid_a;
+    (* mark_debug = "true" *) wire        dec_valid_b;
+    (* mark_debug = "true" *) wire        dec_uncorr_a;
+    (* mark_debug = "true" *) wire        dec_uncorr_b;
 
     // Latched injector output (stable for decoder input)
-    reg [63:0] inj_out_a_latch;
-    reg [63:0] inj_out_b_latch;
+    (* mark_debug = "true" *) reg [63:0] inj_out_a_latch;
+    (* mark_debug = "true" *) reg [63:0] inj_out_b_latch;
 
     decoder_wrapper u_dec_a (
         .clk          (clk),
@@ -309,10 +339,10 @@ module auto_scan_engine (
     // comp_start_sent: flag to ensure comp_start is only pulsed once per trial,
     // in the first cycle of ENC_WAIT (after sym_a/b_latch have been registered).
     reg         comp_start_sent;
-    reg         comp_start;
-    wire        comp_result_a;
-    wire        comp_result_b;
-    wire [7:0]  comp_latency_a;
+    (* mark_debug = "true" *) reg         comp_start;
+    (* mark_debug = "true" *) wire        comp_result_a;
+    (* mark_debug = "true" *) wire        comp_result_b;
+    (* mark_debug = "true" *) wire [7:0]  comp_latency_a;
     wire [7:0]  comp_latency_b;
     wire        comp_ready_a;
     wire        comp_ready_b;
@@ -413,6 +443,8 @@ module auto_scan_engine (
             enc_out_a_latch  <= 64'd0;
             enc_out_b_latch  <= 64'd0;
             cw_len_latch     <= 8'd0;
+            enc_done_d1      <= 1'b0;
+            inj_wait_cnt     <= 2'd0;  // BUG FIX #33: was inj_wait_done <= 1'b0
             inj_out_a_latch  <= 64'd0;
             inj_out_b_latch  <= 64'd0;
 
@@ -483,15 +515,26 @@ module auto_scan_engine (
                 // ENC_WAIT: Wait for encoder to finish
                 //   - First cycle: sym_a/b_latch are now stable (registered).
                 //     Issue comp_start once to write original data into comparator.
-                //   - enc_done=1 indicates codeword_A/B are valid
-                //   - Latch encoder output (lower 64 bits = packed residues)
+                //   - enc_done=1 indicates encoder_2nrm has finished computing.
+                //   - BUG FIX: encoder_wrapper latches codeword_A/B on enc_done=1
+                //     via NBA assignment, so codeword_A/B are only valid at T+2
+                //     (one cycle AFTER enc_done=1). We must wait one extra cycle
+                //     (enc_done_d1=1) before latching enc_out_a/b_latch.
                 //   - WATCHDOG: if dec_timeout_flag=1, force FAIL and exit.
+                //
+                // TIMING (after BUG FIX in encoder_wrapper.v):
+                //   T+0: enc_start=1 (from GEN_WAIT)
+                //   T+1: enc_done=1, encoder_wrapper NBA: codeword_A ← new value
+                //        enc_done_d1 registered ← 1 (NBA, effective T+2)
+                //   T+2: enc_done_d1=1, codeword_A = new value ✅
+                //        → latch enc_out_a_latch, advance to INJ_WAIT
                 // =============================================================
                 `ENG_STATE_ENC_WAIT: begin
                     if (dec_timeout_flag) begin
                         // Watchdog triggered: encoder stalled
-                        result_pass <= 1'b0;
-                        state       <= `ENG_STATE_DONE;
+                        result_pass  <= 1'b0;
+                        enc_done_d1  <= 1'b0;
+                        state        <= `ENG_STATE_DONE;
                     end else begin
                         // Issue comp_start in the FIRST cycle of ENC_WAIT only.
                         // At this point sym_a/b_latch are stable (latched in GEN_WAIT).
@@ -501,11 +544,16 @@ module auto_scan_engine (
                             comp_start_sent <= 1'b1;
                         end
 
-                        if (enc_done) begin
-                            // Latch encoder output (lower 64 bits contain packed residues)
+                        // Register enc_done by 1 cycle to align with codeword_A/B
+                        // becoming valid (encoder_wrapper NBA delay).
+                        enc_done_d1 <= enc_done;
+
+                        if (enc_done_d1) begin
+                            // T+2: codeword_A/B are now valid (encoder_wrapper NBA settled)
                             enc_out_a_latch <= codeword_a_raw[63:0];
                             enc_out_b_latch <= codeword_b_raw[63:0];
                             cw_len_latch    <= cw_len_a; // Both channels same length
+                            enc_done_d1     <= 1'b0;     // Clear for next trial
 
                             // Error injector will process on next cycle (registered)
                             state <= `ENG_STATE_INJ_WAIT;
@@ -515,23 +563,63 @@ module auto_scan_engine (
 
                 // =============================================================
                 // INJ_WAIT: Wait for error injector to produce output
-                //   - error_injector_unit has 1-cycle registered latency
-                //   - After 1 cycle, inj_out_a/b are valid
-                //   - Latch injector output and start decoder
-                //   - WATCHDOG: if dec_timeout_flag=1, force FAIL and exit.
-                //     (Extremely unlikely here since injector is purely registered,
-                //      but included for completeness.)
+                //
+                // BUG FIX #33 (replaces incomplete BUG FIX #29):
+                // error_injector_unit has 2-cycle pipeline latency from data_in
+                // stable to data_out valid:
+                //
+                //   Cycle N+0 (cnt=0, entry to INJ_WAIT):
+                //     enc_out_a_latch is stable on data_in port.
+                //     inject_en_latch is stable on inject_en port.
+                //     Internally: inject_en_d1 <= inject_en (NBA, N+1 effective)
+                //                 data_in_d1   <= data_in   (NBA, N+1 effective)
+                //                 BRAM ena = inject_en → BRAM starts reading
+                //     → inj_wait_cnt: 0 → 1
+                //
+                //   Cycle N+1 (cnt=1):
+                //     inject_en_d1 = inject_en (NBA settled)
+                //     data_in_d1   = enc_out_a_latch (NBA settled)
+                //     BRAM output bram_dout is valid (1-cycle BRAM latency)
+                //     Internally: data_out <= data_in_d1 ^ bram_dout (NBA, N+2 effective)
+                //     → inj_wait_cnt: 1 → 2
+                //
+                //   Cycle N+2 (cnt=2):
+                //     data_out = data_in_d1 ^ bram_dout (NBA settled) ✅
+                //     inj_out_a/b are now valid → latch them
+                //     → inj_wait_cnt: 2 → 0 (cleared for next trial)
+                //
+                // WHY BUG #29 WAS INCOMPLETE:
+                //   The 1-bit inj_wait_done flag caused the FSM to latch at
+                //   Cycle N+1 (inj_wait_done: 0→1→latch), but data_out is only
+                //   valid at Cycle N+2. The latch captured the PREVIOUS trial's
+                //   data_out (stale value), causing the decoder to receive the
+                //   wrong codeword and the comparator to always FAIL.
+                //
+                // FIX: Use 2-bit inj_wait_cnt counter (0→1→2→latch):
+                //   cnt=0: first cycle  (injector pipeline starting)
+                //   cnt=1: second cycle (injector pipeline running)
+                //   cnt=2: third cycle  (data_out valid, latch and advance)
+                //
+                // WATCHDOG: if dec_timeout_flag=1, force FAIL and exit.
                 // =============================================================
                 `ENG_STATE_INJ_WAIT: begin
                     if (dec_timeout_flag) begin
                         // Watchdog triggered (unexpected)
-                        result_pass <= 1'b0;
-                        state       <= `ENG_STATE_DONE;
+                        result_pass  <= 1'b0;
+                        inj_wait_cnt <= 2'd0;  // BUG FIX #33: clear counter
+                        state        <= `ENG_STATE_DONE;
+                    end else if (inj_wait_cnt < 2'd2) begin
+                        // Cycles 0 and 1: injector pipeline is running.
+                        // enc_out_a/b_latch are stable on injector data_in.
+                        // Do NOT latch yet — inj_out_a/b still hold previous values.
+                        inj_wait_cnt <= inj_wait_cnt + 2'd1;
                     end else begin
-                        // Injector output is valid this cycle (1-cycle latency from ENC_WAIT)
-                        // Latch injector output for decoder input
+                        // Cycle 2 (cnt=2): inj_out_a/b are now valid
+                        // (2-cycle pipeline latency fully settled).
+                        // Latch injector output for decoder input.
                         inj_out_a_latch <= inj_out_a;
                         inj_out_b_latch <= inj_out_b;
+                        inj_wait_cnt    <= 2'd0;  // BUG FIX #33: clear counter for next trial
 
                         // Record injection metadata
                         was_injected <= inject_en_latch;

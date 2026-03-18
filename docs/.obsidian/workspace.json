@@ -1,0 +1,200 @@
+{
+  "main": {
+    "id": "e9d1c4370e74b8b5",
+    "type": "split",
+    "children": [
+      {
+        "id": "c83b4c2b69c2f5fb",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "4bf5d486195431f7",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "bug_fix_report_2026_03_18.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "bug_fix_report_2026_03_18"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "58230ebaca56f31c",
+    "type": "split",
+    "children": [
+      {
+        "id": "a88325e01f839f9c",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "219d50d15a92eeb8",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "文件列表"
+            }
+          },
+          {
+            "id": "d9db6bb8660b4152",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "搜索"
+            }
+          },
+          {
+            "id": "b46889058309071d",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "书签"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "015de2d02ce1af1a",
+    "type": "split",
+    "children": [
+      {
+        "id": "de4b8019bd83364a",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "d7483c84ac65072f",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "bug_fix_report_2026_03_17.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "bug_fix_report_2026_03_17 的反向链接列表"
+            }
+          },
+          {
+            "id": "9d07069320a5ad57",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "bug_fix_report_2026_03_17.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "bug_fix_report_2026_03_17 的出链列表"
+            }
+          },
+          {
+            "id": "71743261a72622f8",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "标签"
+            }
+          },
+          {
+            "id": "3c53888b42d2c8b2",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "添加笔记属性"
+            }
+          },
+          {
+            "id": "a66a7777f622ca5c",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "bug_fix_report_2026_03_17.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "bug_fix_report_2026_03_17 的大纲"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:打开快速切换": false,
+      "graph:查看关系图谱": false,
+      "canvas:新建白板": false,
+      "daily-notes:打开/创建今天的日记": false,
+      "templates:插入模板": false,
+      "command-palette:打开命令面板": false,
+      "bases:新建数据库": false
+    }
+  },
+  "active": "4bf5d486195431f7",
+  "lastOpenFiles": [
+    "bug_fix_report_2026_03_17.md",
+    "FPGA Project/auto_scan_engine_ILA.md",
+    "gimini检视代码的结果.md",
+    "bug_fix_report_2026_03_18.md",
+    "ila_debug_guide_2026_03_18.md",
+    "uart_comm_diagnosis_2026_03_18.md",
+    "timing_optimization_report_2026_03_16.md",
+    "timing_optimization_report_2026_03_17.md",
+    "step5_signal_flow_analysis.md",
+    "FPGA project high level design.md",
+    "e2e_signal_flow_analysis.md"
+  ]
+}

@@ -21,9 +21,16 @@
 //     4. COMPARATOR: Two comparisons are performed per output word:
 //                      - Recovered_A == Symbol_A ?  → Pass/Fail for trial 1
 //                      - Recovered_B == Symbol_B ?  → Pass/Fail for trial 2
-//     5. STATISTICS: Each 32-bit prbs_out word increments Total_Trials by 2,
-//                    not 1. This is because it represents two independent
-//                    encode-inject-decode-compare test cycles.
+//     5. STATISTICS: Each 32-bit prbs_out word represents ONE trial in the
+//                    main_scan_fsm statistics model. Although two 16-bit symbols
+//                    (A and B) are processed in parallel, auto_scan_engine merges
+//                    their results via (comp_result_a && comp_result_b) into a
+//                    single result_pass signal. main_scan_fsm increments
+//                    trial_cnt by 1 per eng_done pulse, which is semantically
+//                    correct: one trial = one joint A+B pass/fail decision.
+//                    NOTE: The previous comment "Total_Trials should increment
+//                    by 2" was incorrect and has been removed (comment-only fix,
+//                    no functional change to this module).
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // LFSR Specification:
@@ -140,10 +147,11 @@ module prbs_generator (
                 //   ensuring they are statistically independent pseudo-random
                 //   values within the maximal-length sequence.
                 //
-                //   IMPORTANT: Each assertion of prbs_valid represents
-                //   TWO test trials (one for Symbol_A, one for Symbol_B).
-                //   The downstream statistics counter must increment by 2
-                //   for each prbs_valid pulse.
+                //   NOTE: Each assertion of prbs_valid represents ONE test
+                //   trial in the statistics model. auto_scan_engine merges
+                //   Symbol_A and Symbol_B results into a single result_pass
+                //   (comp_result_a && comp_result_b). main_scan_fsm increments
+                //   trial_cnt by 1 per eng_done, which is correct.
                 // -------------------------------------------------------------
                 lfsr_q     <= lfsr_next;
                 prbs_out   <= lfsr_next;   // [31:16]=Symbol_A, [15:0]=Symbol_B

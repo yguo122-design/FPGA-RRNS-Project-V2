@@ -136,6 +136,13 @@ module tx_packet_assembler (
     // 8-bit XOR checksum accumulator
     reg [7:0] xor_chk;
 
+    // BUG FIX #28: 1-bit flag to implement 2-cycle RD_WAIT for BRAM latency.
+    // mem_stats_array uses synchronous read (1-cycle latency): the BRAM output
+    // (mem_rd_data) is valid 1 cycle AFTER mem_rd_addr is presented.
+    // rd_wait_done=0: first cycle in RD_WAIT (addr just became stable, BRAM reading)
+    // rd_wait_done=1: second cycle in RD_WAIT (mem_rd_data now valid, latch it)
+    reg       rd_wait_done;
+
     // =========================================================================
     // 3. Byte Selection from 176-bit Entry (Big-Endian serialization)
     // =========================================================================
@@ -202,6 +209,7 @@ module tx_packet_assembler (
             entry_latch    <= {`STATS_DATA_WIDTH{1'b0}};
             algo_id_latch  <= 2'd0;
             mode_id_latch  <= 2'd0;
+            rd_wait_done   <= 1'b0;
 
         end else begin
             // Default: deassert single-cycle signals
@@ -312,16 +320,43 @@ module tx_packet_assembler (
                 end
 
                 // =============================================================
-                // RD_WAIT: Wait 1 cycle for BRAM read latency
-                //   mem_rd_addr was set in previous state/cycle.
-                //   BRAM output (mem_rd_data) is valid this cycle.
-                //   Latch it and proceed to SEND_BYTES.
+                // RD_WAIT: Wait for BRAM read latency (2-cycle total)
+                //
+                // BUG FIX #28: mem_stats_array uses synchronous read (1-cycle
+                // latency). The previous implementation only waited 1 cycle in
+                // RD_WAIT, but at that point dout_b still reflects the PREVIOUS
+                // address (the NBA for rd_addr_b takes effect at T+1, and the
+                // BRAM output appears at T+2). This caused every point to read
+                // the data of the PRECEDING point, resulting in:
+                //   Point_ID=1 → BRAM reset value (all zeros, BER_Index=0)
+                //   Point_ID=2 → addr=0 data (BER_Index=0)
+                //   Point_ID=3 → addr=1 data (BER_Index=1)  ← off by 1
+                //
+                // FIX: Use a 1-bit flag (rd_wait_done) to stay in RD_WAIT for
+                // exactly 2 cycles:
+                //   Cycle 1 (rd_wait_done=0): address is now stable on BRAM
+                //     input (NBA settled). BRAM begins reading. Do NOT latch.
+                //   Cycle 2 (rd_wait_done=1): BRAM output (mem_rd_data) is
+                //     valid. Latch entry_latch and advance to SEND_BYTES.
+                //
+                // TIMING:
+                //   T+0: mem_rd_addr set (NBA from GINFO or SEND_BYTES)
+                //   T+1: RD_WAIT cycle 1 — addr stable, BRAM reads
+                //   T+2: RD_WAIT cycle 2 — mem_rd_data valid, latch & advance
                 // =============================================================
                 `ASM_STATE_RD_WAIT: begin
-                    tx_valid    <= 1'b0;
-                    entry_latch <= mem_rd_data; // Latch 176-bit BRAM output
-                    byte_cnt    <= 5'd0;        // Start from byte 0 (BER_Index)
-                    state       <= `ASM_STATE_SEND_BYTES;
+                    tx_valid <= 1'b0;
+                    if (!rd_wait_done) begin
+                        // Cycle 1: address is stable, BRAM is reading.
+                        // Do NOT latch yet — mem_rd_data is still the old value.
+                        rd_wait_done <= 1'b1;
+                    end else begin
+                        // Cycle 2: mem_rd_data is now valid for the current address.
+                        entry_latch  <= mem_rd_data; // Latch 176-bit BRAM output
+                        byte_cnt     <= 5'd0;        // Start from byte 0 (BER_Index)
+                        rd_wait_done <= 1'b0;        // Clear flag for next RD_WAIT
+                        state        <= `ASM_STATE_SEND_BYTES;
+                    end
                 end
 
                 // =============================================================
