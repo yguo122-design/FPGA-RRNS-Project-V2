@@ -5,8 +5,13 @@ import time
 import struct
 import csv
 import os
+import sys
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple
+
+# Script directory (used for result output path)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+RESULT_DIR = os.path.join(SCRIPT_DIR, 'result')
 
 # ================= Configuration Constants =================
 DEFAULT_PORT = 'COM8'       # Default serial port (Linux: /dev/ttyUSB0)
@@ -21,6 +26,21 @@ ALGO_MAP = {
     2: "C-RRNS",
     3: "RS"
 }
+
+# Valid codeword bit widths per algorithm (W_valid)
+# Used for computing actual BER from Flip_Count:
+#   BER_actual = Flip_Count / (Total_Trials * W_valid)
+ALGO_W_VALID = {
+    0: 41,   # 2NRM-RRNS: {257,256,61,59,55,53} → 9+8+6+6+6+6 = 41 bits
+    1: 48,   # 3NRM-RRNS: 48 bits
+    2: 61,   # C-RRNS:    61 bits
+    3: 48,   # RS:        48 bits
+}
+
+# BER test point mapping: index → BER value
+# BER_Index 0 → 0.000 (baseline, no injection), 1 → 0.001, ..., 100 → 0.100
+BER_START  = 0.0
+BER_STEP   = 0.001
 
 # Error Mode Mapping
 ERROR_MODE_MAP = {
@@ -60,13 +80,11 @@ POINT_DATA_SIZE = 22   # 22 Bytes per BER point (176-bit entry)
 # Downlink: Header(2) + CmdID(1) + Len(1) + Payload(7) + Checksum(1) = 12 Bytes
 FRAME_LEN_REQ = 12
 
-# Uplink: Header(2) + CmdID(1) + Length(2) + GlobalInfo(3) + Data(91*22) + Checksum(1) = 2011 Bytes
-# Length field value = GlobalInfo(3) + PerPointData(91*22=2002) = 2005 = 0x07D5
-# (Note: Spec v1.7 doc example shows 0x077A=1914 which was for 21-byte/point version.
-#  With 22-byte/point: 3+2002=2005=0x07D5. This implementation uses 0x07D5.)
-FRAME_LEN_RESP = 2011
-PAYLOAD_DATA_POINTS = 91
-EXPECTED_LENGTH_FIELD = 0x07D5  # 2005: GlobalInfo(3) + 91*22(2002)
+# Uplink: Header(2) + CmdID(1) + Length(2) + GlobalInfo(3) + Data(101*22) + Checksum(1) = 2231 Bytes
+# Length field value = GlobalInfo(3) + PerPointData(101*22=2222) = 2225 = 0x08B1
+FRAME_LEN_RESP = 2231
+PAYLOAD_DATA_POINTS = 101
+EXPECTED_LENGTH_FIELD = 0x08B1  # 2225: GlobalInfo(3) + 101*22(2222)
 
 class FpgaController:
     def __init__(self, port: str, baudrate: int):
@@ -318,19 +336,22 @@ class FpgaController:
                 # entry_bytes[21] = Reserved (0x00), ignored
 
                 # Compute derived statistics
-                total_trials = success_cnt + fail_cnt
-                ber_rate     = fail_cnt / total_trials if total_trials > 0 else 0.0
-                avg_clk      = clk_cnt  / total_trials if total_trials > 0 else 0.0
+                total_trials  = success_cnt + fail_cnt
+                success_rate  = success_cnt / total_trials if total_trials > 0 else 0.0
+                avg_clk       = clk_cnt     / total_trials if total_trials > 0 else 0.0
+
+                # BER_Value: target BER for this test point (index → value)
+                ber_value = BER_START + ber_idx * BER_STEP
 
                 point_res = {
-                    'Point_ID':      i + 1,
                     'BER_Index':     ber_idx,
+                    'BER_Value':     ber_value,
                     'Success_Count': success_cnt,
                     'Fail_Count':    fail_cnt,
                     'Flip_Count':    flip_cnt,
                     'Clk_Count':     clk_cnt,
                     'Total_Trials':  total_trials,
-                    'BER_Rate':      ber_rate,
+                    'Success_Rate':  success_rate,
                     'Avg_Clk':       avg_clk,
                 }
                 results.append(point_res)
@@ -441,17 +462,31 @@ def get_user_input() -> Tuple[int, int, int, int]:
     return algo_id, error_mode, burst_len, sample_count
 
 def save_to_csv(data: Dict, filename: str):
-    """Save results to a CSV file (v2.0 format: 22-byte/point statistical aggregation)."""
+    """
+    Save results to a CSV file (v2.1 format with post-processing).
+
+    Post-processing changes vs v2.0:
+    - Removed Point_ID column
+    - Added BER_Value column after BER_Index (target BER = 0.01 + index * 0.001)
+    - Renamed BER_Rate → Fail_Rate
+    - Added BER_Value_Act column after Flip_Count (actual BER = Flip_Count / (Total_Trials * W_valid))
+    - Avg_Clk formatted as integer (no decimal places)
+    """
     if not data:
         return
 
     global_info = data['global']
     points = data['points']
+    algo_id = global_info['algo_used']
 
-    # Add timestamp to filename to avoid overwriting
-    base_name = os.path.splitext(filename)[0]
-    ext = os.path.splitext(filename)[1]
-    final_filename = f"{base_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+    # Get W_valid for actual BER calculation
+    w_valid = ALGO_W_VALID.get(algo_id, 41)  # Default to 41 (2NRM) if unknown
+
+    # Output to RESULT_DIR (src/PCpython/result/), create if not exists
+    os.makedirs(RESULT_DIR, exist_ok=True)
+    base_name = os.path.splitext(os.path.basename(filename))[0]
+    ext = os.path.splitext(filename)[1] or '.csv'
+    final_filename = os.path.join(RESULT_DIR, f"{base_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}")
 
     try:
         with open(final_filename, 'w', newline='', encoding='utf-8') as f:
@@ -459,74 +494,232 @@ def save_to_csv(data: Dict, filename: str):
             # Write header info
             writer.writerow(["Test Report (v2.0 Statistical Aggregation, 22-byte/point)"])
             writer.writerow(["Timestamp",    data['timestamp']])
-            writer.writerow(["Algorithm",    ALGO_MAP.get(global_info['algo_used'], "Unknown")])
+            writer.writerow(["Algorithm",    ALGO_MAP.get(algo_id, "Unknown")])
             writer.writerow(["Error Mode",   ERROR_MODE_MAP.get(global_info['mode_used'], "Unknown")])
+            writer.writerow(["Burst_Length", data.get('burst_len', 'N/A')])
             writer.writerow(["Total Points", global_info['total_points']])
             writer.writerow([])  # Empty row
 
-            # Write column headers (v2.0 format)
+            # Write column headers (v2.1 format: no Point_ID, added BER_Value & BER_Value_Act)
             writer.writerow([
-                "Point_ID", "BER_Index",
+                "BER_Index", "BER_Value",
                 "Success_Count", "Fail_Count", "Total_Trials",
-                "BER_Rate", "Flip_Count", "Clk_Count", "Avg_Clk_Per_Trial"
+                "Success_Rate", "Flip_Count", "BER_Value_Act",
+                "Clk_Count", "Avg_Clk_Per_Trial"
             ])
 
             # Write data rows
             for p in points:
+                # Actual BER = total flipped bits / (total trials × W_valid)
+                ber_act = p['Flip_Count'] / (p['Total_Trials'] * w_valid) if p['Total_Trials'] > 0 else 0.0
+
                 writer.writerow([
-                    p['Point_ID'],
                     p['BER_Index'],
+                    f"{p['BER_Value']:.3f}",
                     p['Success_Count'],
                     p['Fail_Count'],
                     p['Total_Trials'],
-                    f"{p['BER_Rate']:.6f}",
+                    f"{p['Success_Rate']:.3f}",     # Success/Total, 3 decimal places
                     p['Flip_Count'],
+                    f"{ber_act:.6f}",
                     p['Clk_Count'],
-                    f"{p['Avg_Clk']:.2f}"
+                    f"{int(round(p['Avg_Clk']))}"   # Integer, no decimal
                 ])
 
         print(f"\n[OK] Data saved to: {final_filename}")
+        return final_filename   # Return path for auto-plotting
     except Exception as e:
         print(f"[ERROR] Failed to save CSV: {e}")
+        return None
 
 def print_results_table(data: Dict):
-    """Print a summary table of results to the terminal (v2.0 statistical aggregation format)."""
+    """
+    Print a summary table of results to the terminal (v2.1 post-processing format).
+
+    Changes vs v2.0:
+    - Removed ID column
+    - Added BER_Value column
+    - Renamed BER_Rate → Fail_Rate
+    - Added BER_Act column (actual BER from Flip_Count)
+    - Avg_Clk shown as integer
+    """
     if not data:
         return
 
     global_info = data['global']
     points = data['points']
+    algo_id = global_info['algo_used']
 
-    algo_name = ALGO_MAP.get(global_info['algo_used'], f"ID={global_info['algo_used']}")
+    algo_name = ALGO_MAP.get(algo_id, f"ID={algo_id}")
     mode_name = ERROR_MODE_MAP.get(global_info['mode_used'], f"Mode={global_info['mode_used']}")
+    w_valid   = ALGO_W_VALID.get(algo_id, 41)
 
-    print("\n" + "="*110)
-    print(f"Test Results Summary — Algorithm: {algo_name}  Mode: {mode_name}  "
-          f"(v2.0 Statistical Aggregation, 22-byte/point)")
-    print("="*110)
-    # Column header
-    print(f"{'ID':<4} {'BER_Idx':<8} {'Success':<10} {'Fail':<10} {'Total':<10} "
-          f"{'BER_Rate':<12} {'Flip_Sum':<10} {'Clk_Sum':<16} {'Avg_Clk':<10}")
-    print("-"*110)
+    print("\n" + "="*125)
+    print(f"Test Results Summary — Algorithm: {algo_name} (W_valid={w_valid})  Mode: {mode_name}")
+    print("="*125)
+    # Column header (no ID, added BER_Value, Success_Rate and BER_Act)
+    print(f"{'BER_Idx':<8} {'BER_Value':<10} {'Success':<10} {'Fail':<10} {'Total':<10} "
+          f"{'Succ_Rate':<10} {'Flip_Sum':<10} {'BER_Act':<12} {'Clk_Sum':<16} {'Avg_Clk':<8}")
+    print("-"*125)
 
     total_success = 0
     total_fail    = 0
     total_trials  = 0
+    total_flips   = 0
 
     for p in points:
-        print(f"{p['Point_ID']:<4} {p['BER_Index']:<8} "
+        ber_act = p['Flip_Count'] / (p['Total_Trials'] * w_valid) if p['Total_Trials'] > 0 else 0.0
+        print(f"{p['BER_Index']:<8} {p['BER_Value']:<10.3f} "
               f"{p['Success_Count']:<10} {p['Fail_Count']:<10} {p['Total_Trials']:<10} "
-              f"{p['BER_Rate']:<12.6f} {p['Flip_Count']:<10} "
-              f"{p['Clk_Count']:<16} {p['Avg_Clk']:<10.2f}")
+              f"{p['Success_Rate']:<10.3f} {p['Flip_Count']:<10} "
+              f"{ber_act:<12.6f} {p['Clk_Count']:<16} {int(round(p['Avg_Clk'])):<8}")
         total_success += p['Success_Count']
         total_fail    += p['Fail_Count']
         total_trials  += p['Total_Trials']
+        total_flips   += p['Flip_Count']
 
-    print("-"*110)
-    overall_ber = total_fail / total_trials if total_trials > 0 else 0.0
+    print("-"*125)
+    overall_success_rate = total_success / total_trials if total_trials > 0 else 0.0
+    overall_ber_act      = total_flips   / (total_trials * w_valid) if total_trials > 0 else 0.0
     print(f"Summary: Total_Success={total_success}  Total_Fail={total_fail}  "
-          f"Total_Trials={total_trials}  Overall_BER={overall_ber:.6f}")
-    print("="*110)
+          f"Total_Trials={total_trials}  "
+          f"Overall_Success_Rate={overall_success_rate:.3f}  Overall_BER_Act={overall_ber_act:.6f}")
+    print("="*125)
+
+def _auto_plot(csv_path: str):
+    """
+    Automatically plot BER curve after saving CSV.
+    Integrates the core logic from plot_ber_curve.py.
+    The PNG is saved alongside the CSV file (same directory, same base name).
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as ticker
+    except ImportError:
+        print("[WARNING] matplotlib not installed. Skipping auto-plot.")
+        print("          Install with: pip install matplotlib")
+        return
+
+    print(f"\n[Plot] Generating BER curve from: {csv_path}")
+
+    try:
+        # ── Parse CSV ──────────────────────────────────────────────────────
+        metadata = {}
+        data_rows = []
+
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            import csv as _csv
+            reader = _csv.reader(f)
+            rows = list(reader)
+
+        # Parse metadata (rows 1~5)
+        for row in rows[1:6]:
+            if len(row) >= 2 and row[0].strip():
+                metadata[row[0].strip()] = row[1].strip()
+
+        # Find header row
+        header_row_idx = None
+        for i, row in enumerate(rows):
+            if row and 'BER_Index' in row[0]:
+                header_row_idx = i
+                break
+
+        if header_row_idx is None:
+            print("[WARNING] Could not find BER_Index column in CSV. Skipping plot.")
+            return
+
+        headers = [h.strip() for h in rows[header_row_idx]]
+        for row in rows[header_row_idx + 1:]:
+            if not row or not row[0].strip():
+                continue
+            row_dict = {headers[i]: row[i].strip() for i in range(min(len(headers), len(row)))}
+            data_rows.append(row_dict)
+
+        if not data_rows:
+            print("[WARNING] No data rows found. Skipping plot.")
+            return
+
+        # ── Extract X/Y ────────────────────────────────────────────────────
+        ber_act_list     = []
+        success_rate_list = []
+        for row in data_rows:
+            try:
+                ber_act      = float(row.get('BER_Value_Act', 0))
+                success_rate = float(row.get('Success_Rate', 0))
+                ber_act_list.append(ber_act)
+                success_rate_list.append(success_rate)
+            except (ValueError, KeyError):
+                continue
+
+        if not ber_act_list:
+            print("[WARNING] Could not extract BER_Value_Act or Success_Rate. Skipping plot.")
+            return
+
+        # ── Build title ────────────────────────────────────────────────────
+        algo  = metadata.get('Algorithm', 'Unknown Algorithm')
+        mode  = metadata.get('Error Mode', 'Unknown Mode')
+        burst = metadata.get('Burst_Length', None)
+        if ('Cluster' in mode or 'Burst' in mode) and burst and burst != 'N/A':
+            title = f"{algo}  |  {mode}  |  Burst Length = {burst}"
+        else:
+            title = f"{algo}  |  {mode}"
+
+        # ── Plot ───────────────────────────────────────────────────────────
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(ber_act_list, success_rate_list,
+                marker='o', markersize=4, linewidth=1.5,
+                color='steelblue', label='Success Rate')
+        ax.set_xlabel('Actual BER (%)', fontsize=12)
+        ax.set_ylabel('Success Rate', fontsize=12)
+        ax.set_title(title, fontsize=13, fontweight='bold', pad=12)
+        # X-axis: display as percentage, auto-select tick interval based on data range
+        ax.xaxis.set_major_formatter(ticker.FuncFormatter(
+            lambda x, _: f'{x * 100:.4g}%'   # e.g. 0.005→0.5%, 0.01→1%, 0.1→10%
+        ))
+        x_max = max(ber_act_list) if ber_act_list else 0.1
+        # Choose tick interval: aim for ~5-10 ticks across the range
+        if x_max <= 0.02:
+            tick_step = 0.005   # 0.5% steps for range ≤ 2%
+        elif x_max <= 0.05:
+            tick_step = 0.01    # 1% steps for range ≤ 5%
+        else:
+            tick_step = 0.01    # 1% steps for range > 5%
+        ax.xaxis.set_major_locator(ticker.MultipleLocator(tick_step))
+        ax.set_xlim(left=0, right=x_max * 1.05)  # X-axis starts from 0, right margin 5%
+        ax.set_ylim(-0.02, 1.05)
+        ax.yaxis.set_major_formatter(ticker.FuncFormatter(
+            lambda y, _: f'{y:.1%}'
+        ))
+        ax.grid(True, linestyle='--', alpha=0.5)
+        ax.set_axisbelow(True)
+        ax.legend(fontsize=10)
+        # timestamp = metadata.get('Timestamp', '')
+        # if timestamp:
+        #     ax.annotate(f'Test: {timestamp}',
+        #                 xy=(0.99, 0.02), xycoords='axes fraction',
+        #                 ha='right', va='bottom', fontsize=8, color='gray')
+        plt.tight_layout()
+
+        # Save PNG alongside CSV (non-blocking: save only, do not call plt.show())
+        png_path = os.path.splitext(csv_path)[0] + '_curve.png'
+        plt.savefig(png_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"[OK] BER curve saved to: {png_path}")
+        # Open the PNG with the default system viewer (non-blocking)
+        try:
+            import subprocess
+            if sys.platform.startswith('win'):
+                os.startfile(png_path)          # Windows: open with default viewer
+            elif sys.platform.startswith('darwin'):
+                subprocess.Popen(['open', png_path])   # macOS
+            else:
+                subprocess.Popen(['xdg-open', png_path])  # Linux
+        except Exception:
+            pass  # If viewer fails, PNG is still saved — user can open manually
+
+    except Exception as e:
+        print(f"[WARNING] Auto-plot failed: {e}")
+
 
 def main():
     # ─────────────────────────────────────────────────────────────────────────
@@ -583,8 +776,13 @@ def main():
             # 5. Display Results
             print_results_table(result_data)
 
-            # 6. Save to CSV
-            save_to_csv(result_data, "test_results.csv")
+            # 6. Save to CSV (pass burst_len so it appears in the CSV header)
+            result_data['burst_len'] = burst_len
+            csv_path = save_to_csv(result_data, "test_results.csv")
+
+            # 7. Auto-plot BER curve from the saved CSV
+            if csv_path:
+                _auto_plot(csv_path)
         else:
             print("No valid data received. Report generation skipped.")
 

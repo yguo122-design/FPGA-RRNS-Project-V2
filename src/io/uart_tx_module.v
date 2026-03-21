@@ -15,7 +15,9 @@ module uart_tx_module (
     // =========================================================================
     // Parameters
     // =========================================================================
-    localparam BAUD_DIV   = 7'd109;  // 100MHz / 921,600 baud = 109 (rounded)
+    // Plan B (50MHz): BAUD_DIV = 50MHz / 921,600 = 54.25 → 54
+    // Actual baud rate = 50,000,000 / 54 = 925,926 bps (error 0.47%, within ±3%)
+    localparam BAUD_DIV   = 7'd54;   // 50MHz / 921,600 baud = 54 (rounded)
     localparam TOTAL_BITS = 4'd10;   // Start(1) + Data(8) + Stop(1)
     
     // =========================================================================

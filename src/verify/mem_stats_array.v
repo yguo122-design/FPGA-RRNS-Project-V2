@@ -1,6 +1,6 @@
 // =============================================================================
 // File: mem_stats_array.v
-// Description: BER Statistics RAM - 91-Entry Direct-Addressed Dual-Port RAM
+// Description: BER Statistics RAM - 101-Entry Direct-Addressed Dual-Port RAM
 //              Part of FPGA Multi-Algorithm Fault-Tolerant Test System
 //              Implements Design Doc v1.7 Section 2.3.3.5
 // Version: v2.0 (Architectural Refactor - BER Statistical Aggregator)

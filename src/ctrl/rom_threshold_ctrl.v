@@ -108,7 +108,7 @@ module rom_threshold_ctrl (
     //   Total max addr: 4095 + 1350 + 14 = 5459 → needs 13 bits ✓
 
     // Constants matching gen_rom.py
-    localparam ALGO_STRIDE = `THRESH_BER_POINTS * `THRESH_LEN_STEPS; // 91 * 15 = 1365
+    localparam ALGO_STRIDE = `THRESH_BER_POINTS * `THRESH_LEN_STEPS; // 101 * 15 = 1515
     localparam BER_STRIDE  = `THRESH_LEN_STEPS;                       // 15
 
     // Combinational address computation

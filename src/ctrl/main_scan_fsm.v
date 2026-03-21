@@ -233,7 +233,7 @@ module main_scan_fsm (
     wire [7:0]  eng_latency;
     wire        eng_was_injected;
     wire [5:0]  eng_flip_a;
-    wire [5:0]  eng_flip_b;
+    // wire [5:0]  eng_flip_b;  // SINGLE-CHANNEL: disabled
     wire [1:0]  eng_uncorr_cnt; // FIX P3: uncorrectable error indicator
 
     auto_scan_engine u_engine (
@@ -252,7 +252,7 @@ module main_scan_fsm (
         .latency_cycles(eng_latency),
         .was_injected  (eng_was_injected),
         .flip_count_a  (eng_flip_a),
-        .flip_count_b  (eng_flip_b),
+        .flip_count_b  (),              // SINGLE-CHANNEL: not connected (output ignored)
         .uncorr_cnt    (eng_uncorr_cnt)  // FIX P3: connect uncorr_cnt output
     );
 
@@ -499,7 +499,8 @@ module main_scan_fsm (
                             res_latency_latch  <= eng_latency;
                             res_injected_latch <= eng_was_injected;
                             res_flip_a_latch   <= eng_flip_a;
-                            res_flip_b_latch   <= eng_flip_b;
+                            // res_flip_b_latch   <= eng_flip_b;  // SINGLE-CHANNEL: disabled
+                            res_flip_b_latch   <= 6'd0;  // SINGLE-CHANNEL: Channel B disabled
                             res_uncorr_latch   <= eng_uncorr_cnt;
 
                             // v2.0: Accumulate statistics for this BER point
@@ -508,7 +509,9 @@ module main_scan_fsm (
                             else
                                 acc_fail    <= acc_fail + 32'd1;
 
-                            acc_flip <= acc_flip + {26'd0, eng_flip_a} + {26'd0, eng_flip_b};
+                            // SINGLE-CHANNEL: only accumulate Channel A flips
+                            // acc_flip <= acc_flip + {26'd0, eng_flip_a} + {26'd0, eng_flip_b};
+                            acc_flip <= acc_flip + {26'd0, eng_flip_a};
                             acc_clk  <= acc_clk + {56'd0, eng_latency};
 
                             // v2.0: Check if we've completed all N trials for this point

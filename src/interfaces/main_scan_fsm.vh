@@ -26,17 +26,18 @@
     `define CURRENT_ALGO_ID     0
 `endif
 
-// Number of BER points: 0.01 to 0.10, step 0.001
-// Calculation: (0.10 - 0.01) / 0.001 + 1 = 91 points
-`define NUM_BER_POINTS      91
+// Number of BER points: 0.000 to 0.100, step 0.001
+// Calculation: (0.100 - 0.000) / 0.001 + 1 = 101 points
+// BER_Index 0 → BER=0.000 (baseline, no injection), 100 → BER=0.100
+`define NUM_BER_POINTS      101
 
 // Total Test Entries = Just the BER points (since Algo is fixed per build)
-// Total = 91 entries.
+// Total = 101 entries.
 `define TOTAL_TEST_ENTRIES  `NUM_BER_POINTS
 
-// Memory Depth: Must accommodate ALL 91 test results.
-// Each entry is 64-bit (8 bytes). Total size = 91 * 64 bits ≈ 5.8 Kbits.
-// Fits easily in a single small BRAM or distributed RAM.
+// Memory Depth: Must accommodate ALL 101 test results.
+// Each entry is 22 bytes. Total size = 101 * 22 = 2222 Bytes.
+// Fits easily in a single small BRAM.
 `define MEM_DEPTH           `TOTAL_TEST_ENTRIES
 
 // -----------------------------------------------------------------------------

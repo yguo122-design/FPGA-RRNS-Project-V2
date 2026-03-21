@@ -3,55 +3,21 @@
 // Description: Top-Level Fault Tolerance Test System
 //              Part of FPGA Multi-Algorithm Fault-Tolerant Test System
 //              Implements Design Doc Section 2.1.3.2
-// Version: v1.0
+// Version: v1.1 (Plan B: True 50MHz operation via MMCM for functional verification)
 //
-// ─────────────────────────────────────────────────────────────────────────────
-// SYSTEM ARCHITECTURE:
+// CLOCK ARCHITECTURE (v1.1):
+//   clk_sys (100MHz board oscillator) → MMCM → clk_50mhz (50MHz)
+//   All logic runs on clk_50mhz.
+//   UART BAUD_DIV updated to 54 (50MHz / 921,600 ≈ 54.25 → 54).
+//   XDC clock constraint: 20ns (50MHz).
+//   This ensures hardware truly runs at 50MHz with no timing violations,
+//   allowing clean functional verification without WNS-induced errors.
+//   After functional verification, revert to 100MHz by removing MMCM.
 //
-//   ┌─────────────────────────────────────────────────────────────────────┐
-//   │                    top_fault_tolerance_test                         │
-//   │                                                                     │
-//   │  uart_rx_pin ──► [uart_rx_module] ──► rx_byte/rx_valid             │
-//   │                                           │                         │
-//   │                                    [protocol_parser]                │
-//   │                                           │ cfg_update_pulse        │
-//   │                                           │ cfg_algo_id             │
-//   │                                           │ cfg_burst_len           │
-//   │                                           │ cfg_error_mode          │
-//   │                                           │ cfg_sample_count        │
-//   │                                           ▼                         │
-//   │                                  [ctrl_register_bank]               │
-//   │                                           │ test_active             │
-//   │                                           │ reg_algo_id             │
-//   │                                           │ reg_burst_len           │
-//   │                                           ▼                         │
-//   │  cfg_update_pulse ──────────────► [seed_lock_unit]                  │
-//   │  free_counter ──────────────────►     │ seed_locked                 │
-//   │                                       │ seed_valid                  │
-//   │                                       ▼                             │
-//   │                              [main_scan_fsm]                        │
-//   │                                       │ tx_valid/tx_data            │
-//   │                                       ▼                             │
-//   │                              [uart_tx_module] ──► uart_tx_pin       │
-//   │                                                                     │
-//   │  LED[0] ◄── led_cfg_ok  (FSM IDLE state)                           │
-//   │  LED[1] ◄── led_running (FSM RUN_TEST state)                        │
-//   │  LED[2] ◄── led_sending (FSM DO_UPLOAD state)                       │
-//   │  LED[3] ◄── led_error   (FSM unexpected state)                      │
-//   └─────────────────────────────────────────────────────────────────────┘
-//
-// LED STATUS MAPPING (Active High, per top_fault_tolerance_test.vh):
-//   led_status[`LED_IDX_CFG_OK]  = led_cfg_ok  → FSM IDLE (ready for start)
-//   led_status[`LED_IDX_RUNNING] = led_running → FSM RUN_TEST (sweep active)
-//   led_status[`LED_IDX_SENDING] = led_sending → FSM DO_UPLOAD (UART TX)
-//   led_status[`LED_IDX_ERROR]   = led_error   → FSM error/unexpected state
-//
-// UART BAUD RATE: 921,600 bps (BAUD_DIV=109 @ 100MHz)
-//
-// SEED LOCK MECHANISM:
-//   A free-running 32-bit counter provides entropy. When cfg_update_pulse
-//   arrives (valid config received via UART), seed_lock_unit captures the
-//   counter value as the PRBS seed for the entire 91-point sweep.
+// UART BAUD RATE: 921,600 bps (BAUD_DIV=54 @ 50MHz)
+//   50,000,000 / 921,600 = 54.25 → 54 (rounded)
+//   Actual baud rate = 50,000,000 / 54 = 925,926 bps
+//   Error = 0.47% (within UART ±3% tolerance)
 // =============================================================================
 
 `include "top_fault_tolerance_test.vh"
@@ -64,6 +30,7 @@ module top_fault_tolerance_test (
     // -------------------------------------------------------------------------
     input  wire        clk_sys,
     // clk_sys: 100 MHz system clock from board oscillator.
+    // MMCM divides this to 50MHz for all internal logic.
 
     input  wire        rst_n,
     // rst_n: Active-low asynchronous reset (from board reset button / SW0).
@@ -72,123 +39,110 @@ module top_fault_tolerance_test (
     // UART Interface
     // -------------------------------------------------------------------------
     input  wire        uart_rx,
-    // uart_rx: UART receive pin (from USB-UART bridge).
-
     output wire        uart_tx,
-    // uart_tx: UART transmit pin (to USB-UART bridge).
 
     // -------------------------------------------------------------------------
-    // Abort Button (BUG FIX P5)
+    // Abort Button
     // -------------------------------------------------------------------------
     input  wire        btn_abort,
-    // btn_abort: Active-High board button for emergency FSM abort.
-    //   Mapped to Arty A7 Left Button (B9) in top.xdc.
-    //   When pressed (HIGH), immediately returns main_scan_fsm to IDLE,
-    //   clearing all in-progress test state. Provides hardware recovery
-    //   from any deadlock without requiring a full power cycle.
-    //   Signal is debounced internally (16ms filter) before use.
 
     // -------------------------------------------------------------------------
     // LED Debug Interface (Active High)
     // -------------------------------------------------------------------------
     output wire [`LED_WIDTH-1:0] led_status,
-    // led_status[0]: cfg_ok  — FSM in IDLE, config received, waiting for start
-    // led_status[1]: running — FSM in RUN_TEST, BER sweep in progress
-    // led_status[2]: sending — FSM in DO_UPLOAD, UART transmission in progress
-    // led_status[3]: error   — FSM in unexpected/error state
-
     output wire [`LED_RESERVED_WIDTH-1:0] led_reserved
-    // led_reserved: Grounded reserved LEDs [7:4] for future ILA triggers.
 );
 
     // =========================================================================
-    // 1. Reserved LEDs: Grounded
+    // 0. Reserved LEDs: Grounded
     // =========================================================================
     assign led_reserved = {`LED_RESERVED_WIDTH{1'b0}};
 
     // =========================================================================
-    // 2. Synchronized Reset
+    // 1. MMCM: Generate 50MHz from 100MHz input clock
+    //    MMCME2_BASE configuration:
+    //      Input:  100MHz (CLKIN1_PERIOD = 10.0ns)
+    //      VCO:    100MHz × 10 = 1000MHz (CLKFBOUT_MULT_F = 10.0)
+    //      Output: 1000MHz / 20 = 50MHz  (CLKOUT0_DIVIDE_F = 20.0)
+    //    VCO frequency 1000MHz is within Artix-7 MMCM VCO range (600-1200MHz).
     // =========================================================================
-    // Two-stage synchronizer for rst_n to prevent metastability.
-    // The reset_sync module (already in src/io/) handles this.
+    wire clk_50mhz;       // 50MHz output clock for all logic
+    wire mmcm_clkfb;      // MMCM feedback clock
+    wire mmcm_locked;     // MMCM lock indicator
+
+    MMCME2_BASE #(
+        .BANDWIDTH          ("OPTIMIZED"),
+        .CLKFBOUT_MULT_F    (10.0),     // VCO = 100MHz × 10 = 1000MHz
+        .CLKFBOUT_PHASE     (0.0),
+        .CLKIN1_PERIOD      (10.0),     // Input clock period = 10ns (100MHz)
+        .CLKOUT0_DIVIDE_F   (20.0),     // Output = 1000MHz / 20 = 50MHz
+        .CLKOUT0_DUTY_CYCLE (0.5),
+        .CLKOUT0_PHASE      (0.0),
+        .CLKOUT4_CASCADE    ("FALSE"),
+        .DIVCLK_DIVIDE      (1),
+        .REF_JITTER1        (0.0),
+        .STARTUP_WAIT       ("FALSE")
+    ) u_mmcm (
+        .CLKIN1   (clk_sys),        // 100MHz input
+        .CLKFBIN  (mmcm_clkfb),     // Feedback input
+        .CLKOUT0  (clk_50mhz),      // 50MHz output (unbuffered)
+        .CLKFBOUT (mmcm_clkfb),     // Feedback output
+        .LOCKED   (mmcm_locked),    // Lock indicator
+        .PWRDWN   (1'b0),
+        .RST      (1'b0)
+    );
+
+    // =========================================================================
+    // 2. Synchronized Reset (using 50MHz clock)
+    //    rst_n_sync is asserted until MMCM is locked AND rst_n is HIGH.
+    // =========================================================================
     wire rst_n_sync;
 
     reset_sync u_rst_sync (
-        .clk_100m (clk_sys),
-        .rst_n_i  (rst_n),
+        .clk_100m (clk_50mhz),      // Use 50MHz clock for reset sync
+        .rst_n_i  (rst_n & mmcm_locked),  // Hold reset until MMCM locked
         .sys_rst_n(rst_n_sync)
     );
 
     // =========================================================================
-    // 2b. Abort Button Debounce + Synchronization (BUG FIX P5)
+    // 3. Abort Button Debounce (16ms @ 50MHz = 800,000 cycles)
+    //    At 50MHz: 800,000 cycles × 20ns = 16ms
     // =========================================================================
-    // btn_abort is a raw board button (Arty A7 Left Button, B9, Active-High).
-    // It must be debounced before use to prevent glitches from triggering
-    // spurious aborts. The button_debounce module (src/io/button_debounce.v)
-    // provides a 16ms filter (COUNT_MAX=1,600,000 @ 100MHz).
-    //
-    // ABORT SIGNAL POLARITY:
-    //   btn_abort = 1 (button pressed)  → sys_abort = 1 → FSM returns to IDLE
-    //   btn_abort = 0 (button released) → sys_abort = 0 → normal operation
-    //
-    // SAFETY NOTE: sys_abort is level-sensitive in main_scan_fsm (highest
-    // priority, overrides all states). The debounce filter ensures the abort
-    // pulse lasts at least 16ms, which is long enough for the FSM to see it
-    // and return to IDLE, but short enough to not interfere with re-start.
-    //
-    // DEBOUNCE COUNT: 1,600,000 cycles = 16ms @ 100MHz (same as top_module.v)
+    localparam ABORT_DEBOUNCE_COUNT = 32'd800000; // 16ms @ 50MHz
 
-    localparam ABORT_DEBOUNCE_COUNT = 32'd1600000; // 16ms @ 100MHz
-
-    wire btn_abort_debounced; // Debounced, Active-High abort signal
+    wire btn_abort_debounced;
 
     button_debounce #(
         .COUNT_MAX (ABORT_DEBOUNCE_COUNT)
     ) u_btn_abort_debounce (
-        .clk_100m  (clk_sys),
+        .clk_100m  (clk_50mhz),     // Use 50MHz clock
         .sys_rst_n (rst_n_sync),
         .btn_in    (btn_abort),
         .btn_out   (btn_abort_debounced)
     );
 
-    // sys_abort: Active-High, connected directly to main_scan_fsm.sys_abort.
-    // When HIGH, main_scan_fsm immediately returns to IDLE from any state.
-    // ctrl_register_bank is NOT notified of abort (test_active remains HIGH
-    // until the next cfg_update_pulse or test_done_flag). This is intentional:
-    // after abort, the user must re-send a config frame to restart the test,
-    // which will naturally clear test_active via the normal flow.
     wire sys_abort_w;
     assign sys_abort_w = btn_abort_debounced;
 
     // =========================================================================
-    // 3. Free-Running Counter (Entropy Source for Seed Lock Unit)
+    // 4. Free-Running Counter (Entropy Source)
     // =========================================================================
-    // A 32-bit counter that increments every clock cycle.
-    // Provides pseudo-random entropy for seed capture.
     reg [31:0] free_counter;
 
-    always @(posedge clk_sys or negedge rst_n_sync) begin
-        if (!rst_n_sync) free_counter <= 32'd1; // Start at 1 (avoid zero)
+    always @(posedge clk_50mhz or negedge rst_n_sync) begin
+        if (!rst_n_sync) free_counter <= 32'd1;
         else             free_counter <= free_counter + 1'b1;
     end
 
     // =========================================================================
-    // 4. UART RX Module
+    // 5. UART RX Module (50MHz clock, BAUD_DIV=54 in uart_rx_module.v)
     // =========================================================================
-    // -------------------------------------------------------------------------
-    // ILA DEBUG PROBES — LAYER 1: Physical RX
-    // Purpose: Verify that UART bytes are being received at all.
-    //   - uart_rx_sync: The synchronized RX pin. Should toggle when PC sends data.
-    //   - rx_valid:     Single-cycle pulse per received byte. Count pulses = byte count.
-    //   - rx_byte:      The received byte value. Should match sent frame bytes.
-    //   - rx_error:     Framing error flag. If HIGH → baud rate mismatch or noise.
-    // -------------------------------------------------------------------------
-    (* mark_debug = "true" *) wire       rx_valid;
-    (* mark_debug = "true" *) wire [7:0] rx_byte;
-    (* mark_debug = "true" *) wire       rx_error;
+    wire       rx_valid;
+    wire [7:0] rx_byte;
+    wire       rx_error;
 
     uart_rx_module u_uart_rx (
-        .clk_100m   (clk_sys),
+        .clk_100m   (clk_50mhz),    // Use 50MHz clock
         .sys_rst_n  (rst_n_sync),
         .rx_valid   (rx_valid),
         .rx_data    (rx_byte),
@@ -197,37 +151,18 @@ module top_fault_tolerance_test (
     );
 
     // =========================================================================
-    // 5. Protocol Parser
+    // 6. Protocol Parser
     // =========================================================================
-    // Parses incoming UART byte stream into configuration fields.
-    // Frame format: [0xAA][0x55][CMD_ID][LEN][Payload...][Checksum]
-    // On valid config frame: asserts cfg_update_pulse for one cycle.
-
-    // -------------------------------------------------------------------------
-    // ILA DEBUG PROBES — LAYER 2: Protocol Parser
-    // Purpose: Verify that the parser FSM is advancing and producing valid output.
-    //   - parser_state_dbg: Parser FSM state (0=IDLE,1=HDR2,2=CMD,3=LEN,4=PAYLOAD,5=CHKSUM)
-    //                       Should advance 0→1→2→3→4→5→0 for each valid frame.
-    //                       If stuck at 0: no bytes received (Layer 1 problem).
-    //                       If stuck at 1~4: frame format mismatch.
-    //                       If returns to 0 from 5 without cfg_update_pulse: checksum error.
-    //   - checksum_error:   HIGH for one cycle when checksum fails.
-    //                       If HIGH: frame received but checksum wrong.
-    //   - cfg_update_pulse: HIGH for one cycle when a valid frame is fully parsed.
-    //                       This is the key signal — if never HIGH, config never applied.
-    //   - cfg_burst_len:    Parsed burst length. Should match what PC sent.
-    //   - cfg_algo_id:      Parsed algorithm ID. Should match what PC sent.
-    // -------------------------------------------------------------------------
-    (* mark_debug = "true" *) wire        cfg_update_pulse;
+    wire        cfg_update_pulse;
     wire [7:0]  cfg_algo_id;
     wire [7:0]  cfg_burst_len;
     wire [7:0]  cfg_error_mode;
     wire [31:0] cfg_sample_count;
-    (* mark_debug = "true" *) wire [2:0]  parser_state_dbg;
-    (* mark_debug = "true" *) wire        checksum_error;
+    wire [2:0]  parser_state_dbg;
+    wire        checksum_error;
 
     protocol_parser u_parser (
-        .clk             (clk_sys),
+        .clk             (clk_50mhz),   // Use 50MHz clock
         .rst_n           (rst_n_sync),
         .rx_byte         (rx_byte),
         .rx_valid        (rx_valid),
@@ -241,50 +176,30 @@ module top_fault_tolerance_test (
     );
 
     // =========================================================================
-    // 6. Control Register Bank
+    // 7. Control Register Bank
     // =========================================================================
-    // Latches configuration from protocol_parser.
-    // Outputs registered config values to main_scan_fsm.
-    // test_active: asserted when a test is running (from FSM busy signal).
-
-    wire        fsm_busy;   // From main_scan_fsm (connected below)
-    wire        fsm_done;   // From main_scan_fsm (connected below)
-    wire        tx_busy_w;  // From uart_tx_module (connected below)
-
-    // -------------------------------------------------------------------------
-    // ILA DEBUG PROBES — LAYER 3: Control Flow
-    // Purpose: Verify that config reaches the FSM and triggers the test.
-    //   - test_active:   HIGH after valid config received, until test completes.
-    //                    If cfg_update_pulse fired but test_active stays LOW:
-    //                    ctrl_register_bank has a bug.
-    //   - config_locked: HIGH when config is locked (same cycle as test_active).
-    //   - fsm_busy:      HIGH when FSM is running (not IDLE/FINISH).
-    //                    Should go HIGH shortly after test_active rises.
-    //   - fsm_done:      Single-cycle pulse when sweep completes.
-    // -------------------------------------------------------------------------
-    (* mark_debug = "true" *) wire        test_active;
-    (* mark_debug = "true" *) wire        config_locked;
+    wire        fsm_busy;
+    wire        fsm_done;
+    wire        tx_busy_w;
+    wire        test_active;
+    wire        config_locked;
     wire [7:0]  reg_algo_id;
     wire [7:0]  reg_burst_len;
     wire [7:0]  reg_error_mode;
     wire [31:0] reg_sample_count;
 
-  ctrl_register_bank u_reg_bank (
-        .clk              (clk_sys),
+    ctrl_register_bank u_reg_bank (
+        .clk              (clk_50mhz),  // Use 50MHz clock
         .rst_n            (rst_n_sync),
-        // Configuration input from parser
         .cfg_update_pulse (cfg_update_pulse),
         .cfg_algo_id_in   (cfg_algo_id),
         .cfg_burst_len_in (cfg_burst_len),
         .cfg_error_mode_in(cfg_error_mode),
         .cfg_sample_count_in(cfg_sample_count),
-        // Runtime status inputs
         .test_done_flag   (fsm_done),
         .tx_busy          (tx_busy_w),
-        // Control outputs
         .test_active      (test_active),
         .config_locked    (config_locked),
-        // Registered configuration outputs
         .reg_algo_id      (reg_algo_id),
         .reg_burst_len    (reg_burst_len),
         .reg_error_mode   (reg_error_mode),
@@ -292,86 +207,59 @@ module top_fault_tolerance_test (
     );
 
     // =========================================================================
-    // 6b. cfg_update_pulse Delay Register (1-cycle delay for seed_lock_unit)
+    // 8. cfg_update_pulse Delay Register (1-cycle delay for seed_lock_unit)
     // =========================================================================
-    // BUG FIX (P2): cfg_update_pulse and config_locked are generated in the
-    // same clock cycle by ctrl_register_bank (non-blocking assignment).
-    // At the rising edge when cfg_update_pulse=1, config_locked is still 0
-    // (the new value takes effect on the NEXT cycle).
-    //
-    // seed_lock_unit requires: lock_en=1 AND capture_pulse=1 simultaneously.
-    // If capture_pulse is connected directly to cfg_update_pulse, the condition
-    // lock_en(=0) && capture_pulse(=1) is NEVER satisfied → seed never latched.
-    //
-    // Fix: Delay cfg_update_pulse by 1 cycle so it aligns with config_locked.
-    //   T+0: cfg_update_pulse=1, config_locked←1 (NBA, not yet visible)
-    //   T+1: cfg_update_pulse_d1=1, config_locked=1 → condition satisfied ✓
     reg cfg_update_pulse_d1;
-    always @(posedge clk_sys or negedge rst_n_sync) begin
+    always @(posedge clk_50mhz or negedge rst_n_sync) begin
         if (!rst_n_sync) cfg_update_pulse_d1 <= 1'b0;
         else             cfg_update_pulse_d1 <= cfg_update_pulse;
     end
 
     // =========================================================================
-    // 7. Seed Lock Unit (External to main_scan_fsm, per design requirement)
+    // 9. Seed Lock Unit
     // =========================================================================
-    // Captures free_counter value when cfg_update_pulse_d1 arrives (1 cycle
-    // after cfg_update_pulse), which is aligned with config_locked going HIGH.
-    // lock_en: HIGH during the entire scan task (tied to config_locked).
-    // capture_pulse: cfg_update_pulse_d1 (delayed 1 cycle to align with lock_en).
-
     wire [31:0] seed_locked;
     wire        seed_valid;
 
     seed_lock_unit u_seed_lock (
-        .clk          (clk_sys),
+        .clk          (clk_50mhz),  // Use 50MHz clock
         .rst_n        (rst_n_sync),
         .lock_en      (config_locked),
-        .capture_pulse(cfg_update_pulse_d1), // FIX: use 1-cycle delayed pulse
+        .capture_pulse(cfg_update_pulse_d1),
         .free_cnt_val (free_counter),
         .seed_locked  (seed_locked),
         .seed_valid   (seed_valid)
     );
 
     // =========================================================================
-    // 8. Main Scan FSM (Core Engine)
+    // 10. Main Scan FSM
     // =========================================================================
-    // Orchestrates the full 91-point BER sweep.
-    // Outputs tx_valid/tx_data for UART transmission via uart_tx_module.
-    // Outputs LED debug signals directly from internal FSM state.
-
     wire        fsm_tx_valid;
     wire [7:0]  fsm_tx_data;
     wire [1:0]  fsm_status;
     wire [6:0]  fsm_ber_cnt;
-
-    // LED signals from FSM (directly driven by state register)
     wire        led_cfg_ok_w;
     wire        led_running_w;
     wire        led_sending_w;
     wire        led_error_w;
 
     main_scan_fsm u_fsm (
-        .clk          (clk_sys),
+        .clk          (clk_50mhz),  // Use 50MHz clock
         .rst_n        (rst_n_sync),
-        // Control inputs
-        .sys_start    (test_active),          // test_active from register bank
-        .sys_abort    (sys_abort_w),          // FIX P5: connected to debounced btn_abort (B9)
-        .sample_count (reg_sample_count),     // FIX Issue2: N trials per BER point
-        .mode_id      (reg_error_mode[1:0]),  // FIX Issue1: error mode → Global Info
-        .burst_len    (reg_burst_len[3:0]),   // Lower 4 bits of registered burst length
-        .seed_in      (seed_locked),          // Locked seed from seed_lock_unit
-        .load_seed    (cfg_update_pulse),     // Reload seed on new config
-        // Status outputs
+        .sys_start    (test_active),
+        .sys_abort    (sys_abort_w),
+        .sample_count (reg_sample_count),
+        .mode_id      (reg_error_mode[1:0]),
+        .burst_len    (reg_burst_len[3:0]),
+        .seed_in      (seed_locked),
+        .load_seed    (cfg_update_pulse),
         .busy         (fsm_busy),
         .done         (fsm_done),
         .status       (fsm_status),
         .ber_cnt_out  (fsm_ber_cnt),
-        // UART TX output (byte stream to uart_tx_module)
         .tx_valid     (fsm_tx_valid),
         .tx_data      (fsm_tx_data),
-        .tx_ready     (~tx_busy_w),           // Ready when UART TX is not busy
-        // LED debug outputs
+        .tx_ready     (~tx_busy_w),
         .led_cfg_ok   (led_cfg_ok_w),
         .led_running  (led_running_w),
         .led_sending  (led_sending_w),
@@ -379,14 +267,10 @@ module top_fault_tolerance_test (
     );
 
     // =========================================================================
-    // 9. UART TX Module
+    // 11. UART TX Module (50MHz clock, BAUD_DIV=54 in uart_tx_module.v)
     // =========================================================================
-    // Serializes bytes from main_scan_fsm (via tx_packet_assembler) to UART.
-    // tx_en: driven by fsm_tx_valid (byte available from assembler).
-    // tx_busy: fed back to FSM as ~tx_ready.
-
     uart_tx_module u_uart_tx (
-        .clk_100m   (clk_sys),
+        .clk_100m   (clk_50mhz),    // Use 50MHz clock
         .sys_rst_n  (rst_n_sync),
         .tx_en      (fsm_tx_valid),
         .tx_data    (fsm_tx_data),
@@ -395,16 +279,8 @@ module top_fault_tolerance_test (
     );
 
     // =========================================================================
-    // 10. LED Status Assignment
+    // 12. LED Status Assignment
     // =========================================================================
-    // Map FSM LED signals to led_status bus using macros from .vh.
-    // Active High. Each bit directly reflects the corresponding FSM state.
-    //
-    //   led_status[LED_IDX_CFG_OK=0]  ← led_cfg_ok  (FSM IDLE)
-    //   led_status[LED_IDX_RUNNING=1] ← led_running (FSM RUN_TEST)
-    //   led_status[LED_IDX_SENDING=2] ← led_sending (FSM DO_UPLOAD)
-    //   led_status[LED_IDX_ERROR=3]   ← led_error   (FSM unexpected)
-
     assign led_status[`LED_IDX_CFG_OK]  = led_cfg_ok_w;
     assign led_status[`LED_IDX_RUNNING] = led_running_w;
     assign led_status[`LED_IDX_SENDING] = led_sending_w;

@@ -375,8 +375,8 @@ module tx_packet_assembler (
 
                         if (byte_cnt == 5'd21) begin
                             // All 22 bytes of this entry sent
-                            if (point_cnt == 7'd90) begin  // 7'd(`PKT_TOTAL_POINTS - 1) = 7'd90
-                                // All 91 points sent → send checksum
+                            if (point_cnt == 7'd100) begin  // 7'd(`PKT_TOTAL_POINTS - 1) = 7'd100
+                                // All 101 points sent → send checksum
                                 tx_valid <= 1'b0;
                                 state    <= `ASM_STATE_CHECKSUM;
                             end else begin

@@ -24,8 +24,8 @@
 `define THRESH_ROM_DATA_WIDTH   32
 
 // Address Calculation Constants
-`define THRESH_BER_POINTS       91      // BER Indices: 0 ~ 90
-`define THRESH_BER_BITS         7       // ceil(log2(91)) = 7 bits
+`define THRESH_BER_POINTS       101     // BER Indices: 0 ~ 100 (BER 0.000~0.100)
+`define THRESH_BER_BITS         7       // ceil(log2(101)) = 7 bits (2^7=128 > 101)
 `define THRESH_LEN_STEPS        15      // Burst Length Steps: 1 ~ 15
 `define THRESH_LEN_BITS         4       // ceil(log2(15)) = 4 bits
 `define THRESH_ALGO_COUNT       4       // 4 Algorithms (2NRM, 3NRM, C-RRNS, RS)

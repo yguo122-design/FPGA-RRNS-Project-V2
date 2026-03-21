@@ -23,9 +23,10 @@
 // 1. Memory Configuration (Spec v1.7 Section 2.3.3.5)
 // -----------------------------------------------------------------------------
 
-// Total Entries: 91 (one per BER test point, index 0~90)
-`define STATS_MEM_DEPTH       91
-`define STATS_MEM_ADDR_WIDTH  7    // ceil(log2(91)) = 7 bits (2^7=128 > 91)
+// Total Entries: 101 (one per BER test point, index 0~100)
+// BER_Index 0 → BER=0.000 (baseline), 100 → BER=0.100
+`define STATS_MEM_DEPTH       101
+`define STATS_MEM_ADDR_WIDTH  7    // ceil(log2(101)) = 7 bits (2^7=128 > 101)
 
 // Data Width per Entry: 176 bits = 22 Bytes
 // Breakdown (Big-Endian field order, MSB first):

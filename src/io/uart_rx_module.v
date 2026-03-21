@@ -53,12 +53,14 @@ module uart_rx_module (
     // =========================================================================
     // BAUD_DIV: number of clock cycles per bit period
     // 100,000,000 / 921,600 = 108.5 → rounded to 109
-    localparam [6:0] BAUD_DIV  = 7'd109;
+    // Plan B (50MHz): BAUD_DIV = 50MHz / 921,600 = 54.25 → 54
+    // Actual baud rate = 50,000,000 / 54 = 925,926 bps (error 0.47%, within ±3%)
+    localparam [6:0] BAUD_DIV  = 7'd54;
 
     // HALF_BIT: half a bit period, used to align sampling to bit center
     // after detecting the start bit falling edge.
-    // 109 / 2 = 54 (integer division, slightly before center — acceptable)
-    localparam [6:0] HALF_BIT  = 7'd54;
+    // Plan B (50MHz): HALF_BIT = 54 / 2 = 27
+    localparam [6:0] HALF_BIT  = 7'd27;
 
     // =========================================================================
     // FSM State Encoding

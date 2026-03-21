@@ -20,9 +20,10 @@ ALGORITHMS = {
     'RS':      {'w_valid': 48, 'id': 3}
 }
 
-# BER Test Points: 91 points, from 1% (0.01) to 10% (0.10), step 0.001
-BER_POINTS = 91
-BER_START = 0.01
+# BER Test Points: 101 points, from 0% (0.000) to 10% (0.100), step 0.001
+# BER_Index 0 → BER=0.000 (baseline, no injection), 1 → 0.001, ..., 100 → 0.100
+BER_POINTS = 101
+BER_START = 0.0
 BER_STEP = 0.001
 
 # Burst Length Range: 1 ~ 15 (Strictly enforced per Doc v1.61)
@@ -34,22 +35,56 @@ NUM_BURST_STEPS = MAX_BURST_LEN  # Should be 15
 # ================= Utility Functions =================
 def calculate_threshold(target_ber: float, burst_len: int, w_valid: int) -> int:
     """
-    Calculate LFSR Threshold Integer
-    Formula: Threshold_Int = round( (BER_target * W_valid / L) * (2^32 - 1) )
+    Calculate LFSR Threshold Integer with invalid-offset compensation.
+
+    BUG FIX (2026-03-21, Bug #62):
+    The original formula did NOT account for the fact that the 6-bit random offset
+    from the LFSR covers [0, 63], but only [0, w_valid - burst_len] are valid
+    (i.e., the burst fits entirely within the W_valid window).
+    Invalid offsets cause the error_lut ROM to return 0 (no injection), which
+    means the actual injection probability is:
+        P_actual = P_trigger * (w_valid - burst_len + 1) / 64
+
+    This causes the actual BER to be systematically LOWER than the target BER
+    by a factor of (w_valid - burst_len + 1) / 64, which varies per algorithm
+    and burst length (e.g., 2NRM L=1: 41/64 = 64.1%, RS L=1: 48/64 = 75.0%).
+
+    FIX: Multiply P_trigger by the compensation factor 64 / num_valid_offsets
+    so that the effective injection probability after ROM filtering equals the
+    intended P_trigger:
+        P_trigger_corrected = (BER_target * W_valid / L) * (64 / num_valid_offsets)
+        where num_valid_offsets = W_valid - L + 1
+
+    This ensures:
+        P_actual = P_trigger_corrected * num_valid_offsets / 64
+                 = (BER_target * W_valid / L)   [as intended]
+
+    Formula: Threshold_Int = round( P_trigger_corrected * (2^32 - 1) )
     """
     if burst_len <= 0:
         return 0
-    
-    # Probability of triggering an error event per burst window
-    # Logic: We want 'burst_len' bits to have a total expected error count of target_ber * w_valid?
-    # Or more commonly: P(bit error) = target_ber. 
-    # The formula provided in prompt implies a specific trigger mechanism for the LFSR.
-    # Sticking to the provided formula:
-    p_trigger = (target_ber * w_valid) / burst_len
-    
+
+    # Number of valid offsets: offset in [0, w_valid - burst_len]
+    num_valid_offsets = w_valid - burst_len + 1
+    if num_valid_offsets <= 0:
+        # burst_len > w_valid: impossible to inject, return 0
+        return 0
+
+    # OFFSET_RANGE = 64 (6-bit LFSR offset field)
+    OFFSET_RANGE = 64
+
+    # Base trigger probability (without compensation)
+    p_trigger_base = (target_ber * w_valid) / burst_len
+
+    # Compensation factor: scale up to account for invalid offsets returning 0
+    # After ROM filtering, effective probability = p_trigger_corrected * (num_valid_offsets / 64)
+    # We want this to equal p_trigger_base, so:
+    compensation = OFFSET_RANGE / num_valid_offsets
+    p_trigger_corrected = p_trigger_base * compensation
+
     # Map probability to 32-bit integer space
-    threshold = round(p_trigger * (2**32 - 1))
-    
+    threshold = round(p_trigger_corrected * (2**32 - 1))
+
     # Clamp to 32-bit range [0, 0xFFFFFFFF]
     return max(0, min(threshold, 0xFFFFFFFF))
 

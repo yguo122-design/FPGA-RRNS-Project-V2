@@ -3,12 +3,16 @@
 ## Target Board: Digilent Arty A7-100 (Rev. D/E)
 ## Top Module  : top_fault_tolerance_test
 ## Clock       : 100MHz
-## Last Updated: 2026-03-16 (Fixed port name mismatches)
+## Last Updated: 2026-03-19 (v2.21 Bug #42 fix - removed wrong multicycle paths)
 ## --------------------------------------------------------------------
 
 ## 1. Clock Signal (100MHz)
 ## Verilog port: clk_sys
 set_property -dict {PACKAGE_PIN E3 IOSTANDARD LVCMOS33} [get_ports clk_sys]
+## Plan B (50MHz functional verification via MMCM):
+## The board oscillator is still 100MHz, but MMCM divides it to 50MHz.
+## The XDC constraint must match the INPUT clock (100MHz = 10ns period).
+## Vivado will automatically derive the 50MHz constraint for the MMCM output.
 create_clock -period 10.000 -name sys_clk_pin -waveform {0.000 5.000} -add [get_ports clk_sys]
 
 ## 2. Global Reset (Active Low)
@@ -60,166 +64,158 @@ set_false_path -from [get_ports rst_n]
 ## False path on abort button (debounced in RTL, no timing constraint needed)
 set_false_path -from [get_ports btn_abort]
 
-## Multicycle Path Constraints for Stage 2 Modulo Pipeline (Bug #18 fix, 2026-03-17)
-## RATIONALE: Stage 2 of decoder_channel_2nrm_param computes 6 constant modulo
-## operations (% 257, % 256, % 61, % 59, % 55, % 53) on a 16-bit candidate value.
-## Each 16-bit constant modulo operation synthesizes to ~8 CARRY4 stages (~5.5ns
-## logic delay). With routing delay (~6ns), total path delay is ~11.5ns, exceeding
-## the 10ns clock period.
+## --------------------------------------------------------------------
+## BUG #42 FIX: All multicycle path constraints REMOVED (2026-03-19)
+## --------------------------------------------------------------------
+## ROOT CAUSE: The multicycle path constraints were WRONG.
+## They told Vivado these paths have 2 clock cycles, but they are all
+## single-cycle paths. This caused Vivado to relax timing, allowing
+## coeff_mod_s1d to capture wrong values (0 instead of correct value).
+## Result: x_cand = ri + 257*0 = ri = r257 (wrong), dist = 5 (not 0).
+## ILA data 7 confirmed: ch0_x = 0x0088 = r257, ch0_dist = 5.
+## Mathematical proof: coeff_mod=0 → x_cand=136, dist(136,recv_r)=5 ✓
 ##
-## The Stage 2 pipeline is split into 3 sub-stages (2+2+2):
-##   Stage 2a: x_cand_16_s1e -> cand_r_s2a (% 257, % 256)
-##   Stage 2b: x_cand_16_s2a -> cand_r_s2b (% 61, % 59)
-##   Stage 2c: x_cand_16_s2b -> cand_r_s2  (% 55, % 53)
+## All decoder pipeline stages use dont_touch registers with proper
+## single-cycle timing. No multicycle paths are needed.
 ##
-## The paths from x_cand_16_s2a to cand_r_s2b and from x_cand_16_s2b to cand_r_s2
-## are purely combinational modulo operations followed by pipeline registers.
-## Since these are already pipelined (data is correctly captured every clock cycle),
-## set_multicycle_path -setup 2 relaxes the timing analysis window to 2 clock cycles
-## (20ns) without affecting functional correctness.
-##
-## The -hold 1 constraint is required to prevent Vivado from over-relaxing the hold
-## check (hold must still be met within 1 cycle).
-##
-## This constraint applies to all 15 decoder channels (ch0~ch14) since they share
-## the same decoder_channel_2nrm_param module instantiation.
+## Encoder multicycle paths also removed - encoder uses registered
+## outputs that are stable for the full clock cycle.
 
-## Stage 1c -> Stage 1d: coeff_raw_s1c -> coeff_mod_s1d (% P_M2 modulo)
-## Bug #21 fix: 14-bit coeff_raw_s1c % P_M2 still needs ~8 CARRY4 (~4.9ns logic
-## delay). With routing (~5.3ns), total path delay is 10.2ns, exceeding 10ns budget.
-## Functional safety: coeff_raw_s1c (Stage 1c output FF) -> coeff_mod_s1d (Stage 1d
-## output FF) is a standard pipeline path, data correctly captured every clock cycle.
-set_multicycle_path -setup 2 -from [get_cells -hierarchical -filter {NAME =~ *coeff_raw_s1c_reg*}] \
-                              -to   [get_cells -hierarchical -filter {NAME =~ *coeff_mod_s1d_reg*}]
-set_multicycle_path -hold  1 -from [get_cells -hierarchical -filter {NAME =~ *coeff_raw_s1c_reg*}] \
-                              -to   [get_cells -hierarchical -filter {NAME =~ *coeff_mod_s1d_reg*}]
-
-## Stage 1e -> Stage 2a: x_cand_16_s1e -> cand_r_s2a (% 257, % 256)
-## Bug #20 fix: This path was missing from the original multicycle constraints.
-## x_cand_16_s1e is the Stage 1e output register (max_fanout=8, Vivado creates
-## replicated copies _rep__0, _rep__1, etc.). The wildcard covers all copies.
-## Functional safety: x_cand_16_s1e -> cand_r_s2a is a standard pipeline path,
-## data is correctly captured every clock cycle, multicycle path is safe.
-set_multicycle_path -setup 2 -from [get_cells -hierarchical -filter {NAME =~ *x_cand_16_s1e_reg*}] \
-                              -to   [get_cells -hierarchical -filter {NAME =~ *cand_r_s2a_reg*}]
-set_multicycle_path -hold  1 -from [get_cells -hierarchical -filter {NAME =~ *x_cand_16_s1e_reg*}] \
-                              -to   [get_cells -hierarchical -filter {NAME =~ *cand_r_s2a_reg*}]
-
-## Stage 2a -> Stage 2b: x_cand_16_s2a -> cand_r_s2b (% 61, % 59)
-set_multicycle_path -setup 2 -from [get_cells -hierarchical -filter {NAME =~ *x_cand_16_s2a_reg*}] \
-                              -to   [get_cells -hierarchical -filter {NAME =~ *cand_r_s2b_reg*}]
-set_multicycle_path -hold  1 -from [get_cells -hierarchical -filter {NAME =~ *x_cand_16_s2a_reg*}] \
-                              -to   [get_cells -hierarchical -filter {NAME =~ *cand_r_s2b_reg*}]
-
-## Stage 2b -> Stage 2c: x_cand_16_s2b -> cand_r_s2 (% 55, % 53)
-set_multicycle_path -setup 2 -from [get_cells -hierarchical -filter {NAME =~ *x_cand_16_s2b_reg*}] \
-                              -to   [get_cells -hierarchical -filter {NAME =~ *cand_r_s2_reg*}]
-set_multicycle_path -hold  1 -from [get_cells -hierarchical -filter {NAME =~ *x_cand_16_s2b_reg*}] \
-                              -to   [get_cells -hierarchical -filter {NAME =~ *cand_r_s2_reg*}]
-
-## Also cover Stage 2a -> Stage 2b for the first 2 moduli (% 257, % 256)
-## x_cand_16_s1e -> cand_r_s2a (% 257, % 256) - already within budget but add for safety
-## Note: x_cand_16_s1e uses max_fanout=8 so Vivado creates replicated registers (_rep__N)
-## The multicycle path must cover all replicated copies via wildcard matching.
-
-## Multicycle Path Constraints for Encoder 2NRM (Bug #19 fix, 2026-03-17)
-## RATIONALE: encoder_2nrm computes 6 constant modulo operations (% 257, % 256,
-## % 61, % 59, % 55, % 53) on a 16-bit input in a single combinational stage.
-## Each 16-bit constant modulo operation synthesizes to ~9 CARRY4 stages (~5.8ns
-## logic delay). The path from sym_a_latch -> residues_out_A exceeds 10ns budget.
-##
-## SAFETY ANALYSIS: sym_a_latch is assigned in GEN_WAIT state (non-blocking) and
-## becomes stable at the start of ENC_WAIT (one cycle later). enc_start is also
-## asserted at the start of ENC_WAIT. sym_a_latch remains stable throughout
-## ENC_WAIT, INJ_WAIT, DEC_WAIT, COMP_WAIT, and DONE states (only updated in
-## GEN_WAIT). Therefore sym_a_latch is stable for many cycles after enc_start,
-## making set_multicycle_path -setup 2 functionally safe.
-##
-## The encoder_2nrm output register (residues_out_A/B) captures data when start=1.
-## With multicycle path, Vivado allows the combinational path to span 2 clock
-## cycles (20ns budget), which is sufficient for the 10.3ns path delay.
-
-## sym_a_latch -> residues_out_A (encoder Channel A)
-set_multicycle_path -setup 2 -from [get_cells -hierarchical -filter {NAME =~ *sym_a_latch_reg*}] \
-                              -to   [get_cells -hierarchical -filter {NAME =~ *residues_out_A_reg*}]
-set_multicycle_path -hold  1 -from [get_cells -hierarchical -filter {NAME =~ *sym_a_latch_reg*}] \
-                              -to   [get_cells -hierarchical -filter {NAME =~ *residues_out_A_reg*}]
-
-## sym_b_latch -> residues_out_B (encoder Channel B)
-set_multicycle_path -setup 2 -from [get_cells -hierarchical -filter {NAME =~ *sym_b_latch_reg*}] \
-                              -to   [get_cells -hierarchical -filter {NAME =~ *residues_out_B_reg*}]
-set_multicycle_path -hold  1 -from [get_cells -hierarchical -filter {NAME =~ *sym_b_latch_reg*}] \
-                              -to   [get_cells -hierarchical -filter {NAME =~ *residues_out_B_reg*}]
-
-## False path constraints for UART pins (Bug #13 fix, 2026-03-17)
-## RATIONALE: UART is an asynchronous protocol (921,600 bps, bit period = 1,085 ns).
-## The FTDI USB-UART chip samples uart_tx asynchronously -- it does NOT use the FPGA
-## sys_clk_pin as a reference. Therefore set_output_delay / set_input_delay constraints
-## are meaningless and cause false timing violations:
-##
-##   Violation source: Clock Path Skew = -5.493 ns
-##     Source Clock Delay (SCD) = 5.493 ns  (BUFG + routing to uart_tx_pin_reg)
-##     Destination Clock Delay  = 0.000 ns  (output port uses ideal clock edge)
-##   Combined with set_output_delay -max 2.000, effective budget = 7.965 ns,
-##   but OBUF alone requires 3.523 ns -> Slack = -3.036 ns (false violation).
-##
-## FIX: Replace set_input/output_delay with set_false_path to exclude UART I/O
-## ports from timing analysis entirely. This is the standard practice for
-## asynchronous I/O interfaces in Vivado.
-##
-## PREVIOUS (incorrect):
-##   set_input_delay  -clock sys_clk_pin -max 2.000 [get_ports uart_rx]
-##   set_input_delay  -clock sys_clk_pin -min 0.500 [get_ports uart_rx]
-##   set_output_delay -clock sys_clk_pin -max 2.000 [get_ports uart_tx]
-##   set_output_delay -clock sys_clk_pin -min 0.500 [get_ports uart_tx]
+## False path constraints for UART pins
 set_false_path -from [get_clocks sys_clk_pin] -to [get_ports uart_tx]
-set_false_path -from [get_ports uart_rx]      -to [get_clocks sys_clk_pin]
+set_false_path -from [get_ports uart_rx] -to [get_clocks sys_clk_pin]
+
+## --------------------------------------------------------------------
+## Bug #57 FIX REVERTED (2026-03-20, timing15.csv analysis)
+## --------------------------------------------------------------------
+## The set_property MAX_FANOUT XDC constraints were REMOVED because they
+## caused WNS to worsen from -0.69ns to -0.95ns (timing15.csv).
+## Root cause: forcing aggressive register replication caused placement
+## congestion, increasing route delay more than the fanout reduction helped.
+## The real problem is LOGIC DEPTH (% 257 = 5.06ns, % 61 = ~5ns), not
+## fanout. The fix is 2-step decomposition in RTL (Bug #58), not XDC constraints.
+
+## --------------------------------------------------------------------
+## Bug #59 FIX: Targeted XDC MAX_FANOUT constraints (2026-03-20)
+## --------------------------------------------------------------------
+## timing16.csv (WNS = -0.69ns) shows Bug #58 was effective (WNS improved
+## from -0.95ns to -0.69ns). Remaining violations are pure route delay:
+##   coeff_raw_s1c_reg[3]_rep__0: fo=12, net delay 5.98-6.00ns (target=4)
+##   x_mod55_step1_reg_reg[5]_rep__0: fo=5, net delay 5.74ns (target=4)
+##   x_mod53_step1_reg_reg[8]_rep__3: fo=6, net delay 6.06ns (target=2)
+##
+## LESSON FROM BUG #57: Applying MAX_FANOUT to ALL registers simultaneously
+## caused placement congestion. This time, we apply TARGETED constraints
+## only to the specific registers that are still violating timing.
+##
+## NOTE: These constraints apply only to the decoder channel module instances.
+## The -hierarchical flag with specific name patterns limits the scope.
+
+set_property MAX_FANOUT 4 [get_cells -hierarchical -filter {NAME =~ *coeff_raw_s1c_reg*}]
+set_property MAX_FANOUT 4 [get_cells -hierarchical -filter {NAME =~ *x_mod55_step1_reg_reg*}]
+set_property MAX_FANOUT 2 [get_cells -hierarchical -filter {NAME =~ *x_mod53_step1_reg_reg*}]
 
 ## --------------------------------------------------------------------
 ## Decoder Pipeline Fanout Constraints (v2.4 -- Moved to Verilog Attributes)
 ## --------------------------------------------------------------------
 ## NOTE: set_max_fanout is NOT supported in XDC constraint files.
-##   Vivado reports [Designutils 20-1307] when these commands are present.
 ##   The fanout constraints have been moved to decoder_2nrm.v as in-code
-##   Verilog attributes on the affected registers:
-##
-##   (* dont_touch = "true", max_fanout = 4 *) reg [17:0] diff_mod_s1b;
-##   (* dont_touch = "true", max_fanout = 4 *) reg [35:0] coeff_raw_s1c;
-##   (* dont_touch = "true", max_fanout = 4 *) reg [17:0] coeff_mod_s1d;
-##
-##   This is the correct method for Vivado 2023.x and forces register
-##   replication during synthesis, reducing Net Delay from ~6ns to <2ns.
+##   Verilog attributes on the affected registers.
 
 ## --------------------------------------------------------------------
 ## ILA Debug Core Configuration
 ## --------------------------------------------------------------------
-## NOTE: The previous UART debug ILA probes (probe0~probe7 for parser_state_dbg,
-## rx_byte, cfg_update_pulse, etc.) have been REMOVED from this XDC file.
+## ILA probes are added dynamically via Vivado GUI "Set Up Debug" after
+## synthesis. Do NOT add create_debug_core commands here manually, as
+## net names change with each synthesis run.
 ##
-## The new ILA probes for data pipeline debugging are defined directly in
-## auto_scan_engine.v using (* mark_debug = "true" *) Verilog attributes.
-## Vivado will automatically create the ILA core and connect these signals
-## during synthesis (Set Up Debug flow).
+## Current ILA probe targets (for reference, add via GUI after synthesis):
+##   ch_x_reg[0]    (16-bit): ch0 x output (should = sym_a when no injection)
+##   ch_dist_reg[0]  (4-bit): ch0 distance (should = 0 when no injection)
+##   ch_valid_reg[0] (1-bit): ch0 valid signal (use as trigger)
+##   ch_x_reg[6]    (16-bit): ch6 x output (comparison channel)
+##   ch_dist_reg[6]  (4-bit): ch6 distance (comparison channel)
 ##
-## Signals now marked for ILA observation (in auto_scan_engine.v):
-##   - state[2:0]          : FSM state
-##   - inject_en_latch     : injection enable flag
-##   - sym_a_latch[15:0]   : original symbol A
-##   - sym_b_latch[15:0]   : original symbol B
-##   - enc_out_a_latch[63:0]: encoded codeword A
-##   - enc_out_b_latch[63:0]: encoded codeword B
-##   - inj_out_a_latch[63:0]: injected codeword A
-##   - inj_out_b_latch[63:0]: injected codeword B
-##   - dec_start           : decoder start pulse
-##   - dec_out_a[15:0]     : decoded result A
-##   - dec_out_b[15:0]     : decoded result B
-##   - dec_valid_a/b       : decoder valid signals
-##   - dec_uncorr_a/b      : uncorrectable error flags
-##   - comp_start          : comparator start pulse
-##   - comp_result_a/b     : comparison results
-##   - comp_latency_a[7:0] : measured pipeline latency
+## Trigger condition: ch_valid_reg[0] == 1
+## Sample depth: 4096
 ##
-## After synthesis, use Vivado "Set Up Debug" wizard to configure:
-##   - Sample depth: 4096 (covers multiple trials)
-##   - Trigger: dec_valid_a == 1
-##   - Trigger position: 50% (512 samples before, 512 after)
+## See docs/mark_debug_attributes.md for detailed ILA analysis guide.
+
+## NOTE: ILA probes are added via Vivado GUI "Set Up Debug" after synthesis.
+## Net names change with each synthesis run, so do not hardcode them here.
+
+
+create_debug_core u_ila_0 ila
+set_property ALL_PROBE_SAME_MU true [get_debug_cores u_ila_0]
+set_property ALL_PROBE_SAME_MU_CNT 1 [get_debug_cores u_ila_0]
+set_property C_ADV_TRIGGER false [get_debug_cores u_ila_0]
+set_property C_DATA_DEPTH 1024 [get_debug_cores u_ila_0]
+set_property C_EN_STRG_QUAL false [get_debug_cores u_ila_0]
+set_property C_INPUT_PIPE_STAGES 0 [get_debug_cores u_ila_0]
+set_property C_TRIGIN_EN false [get_debug_cores u_ila_0]
+set_property C_TRIGOUT_EN false [get_debug_cores u_ila_0]
+set_property port_width 1 [get_debug_ports u_ila_0/clk]
+connect_debug_port u_ila_0/clk [get_nets [list clk_50mhz_BUFG]]
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe0]
+set_property port_width 41 [get_debug_ports u_ila_0/probe0]
+connect_debug_port u_ila_0/probe0 [get_nets [list {u_fsm/u_engine/inj_out_a_latch[0]} {u_fsm/u_engine/inj_out_a_latch[1]} {u_fsm/u_engine/inj_out_a_latch[2]} {u_fsm/u_engine/inj_out_a_latch[3]} {u_fsm/u_engine/inj_out_a_latch[4]} {u_fsm/u_engine/inj_out_a_latch[5]} {u_fsm/u_engine/inj_out_a_latch[6]} {u_fsm/u_engine/inj_out_a_latch[7]} {u_fsm/u_engine/inj_out_a_latch[8]} {u_fsm/u_engine/inj_out_a_latch[9]} {u_fsm/u_engine/inj_out_a_latch[10]} {u_fsm/u_engine/inj_out_a_latch[11]} {u_fsm/u_engine/inj_out_a_latch[12]} {u_fsm/u_engine/inj_out_a_latch[13]} {u_fsm/u_engine/inj_out_a_latch[14]} {u_fsm/u_engine/inj_out_a_latch[15]} {u_fsm/u_engine/inj_out_a_latch[16]} {u_fsm/u_engine/inj_out_a_latch[17]} {u_fsm/u_engine/inj_out_a_latch[18]} {u_fsm/u_engine/inj_out_a_latch[19]} {u_fsm/u_engine/inj_out_a_latch[20]} {u_fsm/u_engine/inj_out_a_latch[21]} {u_fsm/u_engine/inj_out_a_latch[22]} {u_fsm/u_engine/inj_out_a_latch[23]} {u_fsm/u_engine/inj_out_a_latch[24]} {u_fsm/u_engine/inj_out_a_latch[25]} {u_fsm/u_engine/inj_out_a_latch[26]} {u_fsm/u_engine/inj_out_a_latch[27]} {u_fsm/u_engine/inj_out_a_latch[28]} {u_fsm/u_engine/inj_out_a_latch[29]} {u_fsm/u_engine/inj_out_a_latch[30]} {u_fsm/u_engine/inj_out_a_latch[31]} {u_fsm/u_engine/inj_out_a_latch[32]} {u_fsm/u_engine/inj_out_a_latch[33]} {u_fsm/u_engine/inj_out_a_latch[34]} {u_fsm/u_engine/inj_out_a_latch[35]} {u_fsm/u_engine/inj_out_a_latch[36]} {u_fsm/u_engine/inj_out_a_latch[37]} {u_fsm/u_engine/inj_out_a_latch[38]} {u_fsm/u_engine/inj_out_a_latch[39]} {u_fsm/u_engine/inj_out_a_latch[40]}]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe1]
+set_property port_width 6 [get_debug_ports u_ila_0/probe1]
+connect_debug_port u_ila_0/probe1 [get_nets [list {u_fsm/u_engine/inj_flip_a[0]} {u_fsm/u_engine/inj_flip_a[1]} {u_fsm/u_engine/inj_flip_a[2]} {u_fsm/u_engine/inj_flip_a[3]} {u_fsm/u_engine/inj_flip_a[4]} {u_fsm/u_engine/inj_flip_a[5]}]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe2]
+set_property port_width 16 [get_debug_ports u_ila_0/probe2]
+connect_debug_port u_ila_0/probe2 [get_nets [list {u_fsm/u_engine/sym_a_latch[0]} {u_fsm/u_engine/sym_a_latch[1]} {u_fsm/u_engine/sym_a_latch[2]} {u_fsm/u_engine/sym_a_latch[3]} {u_fsm/u_engine/sym_a_latch[4]} {u_fsm/u_engine/sym_a_latch[5]} {u_fsm/u_engine/sym_a_latch[6]} {u_fsm/u_engine/sym_a_latch[7]} {u_fsm/u_engine/sym_a_latch[8]} {u_fsm/u_engine/sym_a_latch[9]} {u_fsm/u_engine/sym_a_latch[10]} {u_fsm/u_engine/sym_a_latch[11]} {u_fsm/u_engine/sym_a_latch[12]} {u_fsm/u_engine/sym_a_latch[13]} {u_fsm/u_engine/sym_a_latch[14]} {u_fsm/u_engine/sym_a_latch[15]}]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe3]
+set_property port_width 16 [get_debug_ports u_ila_0/probe3]
+connect_debug_port u_ila_0/probe3 [get_nets [list {u_fsm/u_engine/u_dec_a/dec_out_a[0]} {u_fsm/u_engine/u_dec_a/dec_out_a[1]} {u_fsm/u_engine/u_dec_a/dec_out_a[2]} {u_fsm/u_engine/u_dec_a/dec_out_a[3]} {u_fsm/u_engine/u_dec_a/dec_out_a[4]} {u_fsm/u_engine/u_dec_a/dec_out_a[5]} {u_fsm/u_engine/u_dec_a/dec_out_a[6]} {u_fsm/u_engine/u_dec_a/dec_out_a[7]} {u_fsm/u_engine/u_dec_a/dec_out_a[8]} {u_fsm/u_engine/u_dec_a/dec_out_a[9]} {u_fsm/u_engine/u_dec_a/dec_out_a[10]} {u_fsm/u_engine/u_dec_a/dec_out_a[11]} {u_fsm/u_engine/u_dec_a/dec_out_a[12]} {u_fsm/u_engine/u_dec_a/dec_out_a[13]} {u_fsm/u_engine/u_dec_a/dec_out_a[14]} {u_fsm/u_engine/u_dec_a/dec_out_a[15]}]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe4]
+set_property port_width 16 [get_debug_ports u_ila_0/probe4]
+connect_debug_port u_ila_0/probe4 [get_nets [list {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[0]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[1]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[2]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[3]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[4]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[5]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[6]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[7]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[8]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[9]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[10]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[11]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[12]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[13]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[14]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_x_reg[0]_1409[15]}]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe5]
+set_property port_width 4 [get_debug_ports u_ila_0/probe5]
+connect_debug_port u_ila_0/probe5 [get_nets [list {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_dist_reg[0]_898[0]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_dist_reg[0]_898[1]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_dist_reg[0]_898[2]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_dist_reg[0]_898[3]}]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe6]
+set_property port_width 4 [get_debug_ports u_ila_0/probe6]
+connect_debug_port u_ila_0/probe6 [get_nets [list {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_dist_reg[9]_386[0]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_dist_reg[9]_386[1]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_dist_reg[9]_386[2]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch_dist_reg[9]_386[3]}]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe7]
+set_property port_width 4 [get_debug_ports u_ila_0/probe7]
+connect_debug_port u_ila_0/probe7 [get_nets [list {u_fsm/u_engine/u_dec_a/u_dec_2nrm/mid_dist_b_reg[0]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/mid_dist_b_reg[1]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/mid_dist_b_reg[2]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/mid_dist_b_reg[3]}]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe8]
+set_property port_width 4 [get_debug_ports u_ila_0/probe8]
+connect_debug_port u_ila_0/probe8 [get_nets [list {u_fsm/u_engine/u_dec_a/u_dec_2nrm/mid_dist_a_reg[0]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/mid_dist_a_reg[1]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/mid_dist_a_reg[2]} {u_fsm/u_engine/u_dec_a/u_dec_2nrm/mid_dist_a_reg[3]}]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe9]
+set_property port_width 1 [get_debug_ports u_ila_0/probe9]
+connect_debug_port u_ila_0/probe9 [get_nets [list u_fsm/u_engine/u_comp_a/comp_result_a]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe10]
+set_property port_width 1 [get_debug_ports u_ila_0/probe10]
+connect_debug_port u_ila_0/probe10 [get_nets [list u_fsm/u_engine/dec_timeout_flag]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe11]
+set_property port_width 1 [get_debug_ports u_ila_0/probe11]
+connect_debug_port u_ila_0/probe11 [get_nets [list u_fsm/u_engine/dec_valid_a]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe12]
+set_property port_width 1 [get_debug_ports u_ila_0/probe12]
+connect_debug_port u_ila_0/probe12 [get_nets [list u_fsm/u_engine/enc_out_a_latch]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe13]
+set_property port_width 1 [get_debug_ports u_ila_0/probe13]
+connect_debug_port u_ila_0/probe13 [get_nets [list u_fsm/u_engine/eng_result_pass]]
+create_debug_port u_ila_0 probe
+set_property PROBE_TYPE DATA_AND_TRIGGER [get_debug_ports u_ila_0/probe14]
+set_property port_width 1 [get_debug_ports u_ila_0/probe14]
+connect_debug_port u_ila_0/probe14 [get_nets [list u_fsm/u_engine/inject_en_latch]]
+set_property C_CLK_INPUT_FREQ_HZ 300000000 [get_debug_cores dbg_hub]
+set_property C_ENABLE_CLK_DIVIDER false [get_debug_cores dbg_hub]
+set_property C_USER_SCAN_CHAIN 1 [get_debug_cores dbg_hub]
+connect_debug_port dbg_hub/clk [get_nets clk_50mhz_BUFG]

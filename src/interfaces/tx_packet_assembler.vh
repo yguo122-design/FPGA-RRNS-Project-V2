@@ -39,21 +39,17 @@
 
 `define PKT_GLOBAL_INFO_BYTES 3    // Total_Points(1) + Algo_ID(1) + Mode_ID(1)
 `define PKT_BYTES_PER_POINT   22   // 22 bytes per BER point (176-bit)
-`define PKT_TOTAL_POINTS      91   // 91 BER test points (index 0~90)
+`define PKT_TOTAL_POINTS      101  // 101 BER test points (index 0~100, BER 0.000~0.100)
 `define PKT_CHECKSUM_BYTES    1    // 1-byte XOR checksum at frame end
 
-// Length field value = Global_Info + Per_Point_Total (excludes checksum per spec)
-// Length = 3 + 91*22 = 3 + 2002 = 2005... wait, spec says 1914.
-// Re-check spec 2.1.3.2: Length = Payload length = GlobalInfo(3) + PerPointData(91*21=1911)
-// But v1.61 updated to 22 bytes/point: 3 + 91*22 = 3 + 2002 = 2005
-// Spec text says "1914" which was for 21-byte version. With 22-byte: 3+2002=2005.
-// Use 2005 to match actual 22-byte implementation.
-`define PKT_LENGTH_HI         8'h07   // 2005 = 0x07D5
-`define PKT_LENGTH_LO         8'hD5
+// Length field value = GlobalInfo(3) + PerPointData(101*22=2222) = 2225 = 0x08B1
+// (Excludes checksum per spec)
+`define PKT_LENGTH_HI         8'h08   // 2225 = 0x08B1
+`define PKT_LENGTH_LO         8'hB1
 
-// Total frame size = Sync(2) + CmdID(1) + Length(2) + GlobalInfo(3) + 91*22 + Checksum(1)
-//                 = 2 + 1 + 2 + 3 + 2002 + 1 = 2011 bytes
-`define PKT_TOTAL_FRAME_BYTES 2011
+// Total frame size = Sync(2) + CmdID(1) + Length(2) + GlobalInfo(3) + 101*22 + Checksum(1)
+//                 = 2 + 1 + 2 + 3 + 2222 + 1 = 2231 bytes
+`define PKT_TOTAL_FRAME_BYTES 2231
 
 // Byte width
 `define PKT_BYTE_WIDTH        8

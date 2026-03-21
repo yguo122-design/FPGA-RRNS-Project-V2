@@ -3,7 +3,12 @@
 // Description: Unified Wrapper for Multi-Algorithm Encoder Support
 //              Based on Interim Report Parameters (Yuqi Guo, 230184273)
 //              Supports: 2NRM (41b), 3NRM (48b), C-RRNS (61b), RS (48b)
-// Version: v1.1 (Updated with exact codeword lengths from Report Table 3)
+// Version: v1.2 (Single-Channel Mode: Channel B outputs disabled)
+//
+// SINGLE-CHANNEL MODE (v1.2):
+//   data_in_B port retained for interface compatibility but not used.
+//   codeword_B and cw_len_B are driven to 0.
+//   All _B internal wires and assignments are commented out.
 // =============================================================================
 
 `timescale 1ns / 1ps
@@ -132,45 +137,57 @@ module encoder_wrapper (
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            codeword_A <= 256'd0; codeword_B <= 256'd0;
-            cw_len_A   <= 8'd0;   cw_len_B   <= 8'd0;
+            codeword_A <= 256'd0;
+            codeword_B <= 256'd0;  // SINGLE-CHANNEL: always 0
+            cw_len_A   <= 8'd0;
+            cw_len_B   <= 8'd0;    // SINGLE-CHANNEL: always 0
         end else if (done) begin  // FIX: latch on done=1, not start=1
             case (algo_sel_latch)  // Use latched algo_sel (stable at done time)
                 ALGO_2NRM: begin
                     // Report: 41 bits. We use 64-bit container.
                     codeword_A <= {192'd0, out_2nrm_A[63:0]};
-                    codeword_B <= {192'd0, out_2nrm_B[63:0]};
-                    cw_len_A   <= 8'd41; // Exact valid bits
-                    cw_len_B   <= 8'd41;
+                    // codeword_B <= {192'd0, out_2nrm_B[63:0]};  // SINGLE-CHANNEL: disabled
+                    codeword_B <= 256'd0;  // SINGLE-CHANNEL: Channel B disabled
+                    cw_len_A   <= 8'd41;   // Exact valid bits
+                    // cw_len_B   <= 8'd41;  // SINGLE-CHANNEL: disabled
+                    cw_len_B   <= 8'd0;    // SINGLE-CHANNEL: Channel B disabled
                 end
 
                 ALGO_3NRM: begin
                     // Report: 48 bits.
                     codeword_A <= {192'd0, out_3nrm_A[63:0]};
-                    codeword_B <= {192'd0, out_3nrm_B[63:0]};
+                    // codeword_B <= {192'd0, out_3nrm_B[63:0]};  // SINGLE-CHANNEL: disabled
+                    codeword_B <= 256'd0;
                     cw_len_A   <= 8'd48;
-                    cw_len_B   <= 8'd48;
+                    // cw_len_B   <= 8'd48;  // SINGLE-CHANNEL: disabled
+                    cw_len_B   <= 8'd0;
                 end
 
                 ALGO_CRRNS: begin
                     // Report: 61 bits.
                     codeword_A <= {128'd0, out_crrns_A[127:0]};
-                    codeword_B <= {128'd0, out_crrns_B[127:0]};
+                    // codeword_B <= {128'd0, out_crrns_B[127:0]};  // SINGLE-CHANNEL: disabled
+                    codeword_B <= 256'd0;
                     cw_len_A   <= 8'd61;
-                    cw_len_B   <= 8'd61;
+                    // cw_len_B   <= 8'd61;  // SINGLE-CHANNEL: disabled
+                    cw_len_B   <= 8'd0;
                 end
 
                 ALGO_RS: begin
                     // Report: 48 bits (n=12, k=4, m=4).
                     codeword_A <= {192'd0, out_rs_A[63:0]};
-                    codeword_B <= {192'd0, out_rs_B[63:0]};
+                    // codeword_B <= {192'd0, out_rs_B[63:0]};  // SINGLE-CHANNEL: disabled
+                    codeword_B <= 256'd0;
                     cw_len_A   <= 8'd48;
-                    cw_len_B   <= 8'd48;
+                    // cw_len_B   <= 8'd48;  // SINGLE-CHANNEL: disabled
+                    cw_len_B   <= 8'd0;
                 end
 
                 default: begin
-                    codeword_A <= 256'd0; codeword_B <= 256'd0;
-                    cw_len_A   <= 8'd0;   cw_len_B   <= 8'd0;
+                    codeword_A <= 256'd0;
+                    codeword_B <= 256'd0;  // SINGLE-CHANNEL: always 0
+                    cw_len_A   <= 8'd0;
+                    cw_len_B   <= 8'd0;    // SINGLE-CHANNEL: always 0
                 end
             endcase
         end
