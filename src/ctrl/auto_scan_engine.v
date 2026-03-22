@@ -58,7 +58,7 @@ module auto_scan_engine (
     // Control Interface (From Main Scan FSM)
     // -------------------------------------------------------------------------
     input  wire        start,
-    input  wire [1:0]  algo_id,
+    input  wire [2:0]  algo_id,   // 3-bit: 0=2NRM,1=3NRM,2=CRRNS-MLD,3=CRRNS-MRC,4=CRRNS-CRT,5=RS
     input  wire [31:0] threshold_val,
     input  wire [3:0]  burst_len,
     input  wire [31:0] seed_in,
@@ -70,7 +70,7 @@ module auto_scan_engine (
     output wire        busy,
     output reg         done,
     output reg         result_pass,
-    output reg  [7:0]  latency_cycles,
+    output reg  [11:0] latency_cycles,  // 12-bit: covers 3NRM 842 cycles (max 4095)
     output reg         was_injected,
     output reg  [5:0]  flip_count_a,
     output reg  [5:0]  flip_count_b,   // Always 6'd0 in single-channel mode
@@ -261,7 +261,7 @@ module auto_scan_engine (
     reg         comp_start_sent;
     reg         comp_start;
     wire        comp_result_a;
-    wire [7:0]  comp_latency_a;
+    wire [`COMP_LATENCY_WIDTH-1:0] comp_latency_a;  // 12-bit: matches COMP_LATENCY_WIDTH
     wire        comp_ready_a;
     // wire        comp_result_b;    // SINGLE-CHANNEL: disabled
     // wire [7:0]  comp_latency_b;   // SINGLE-CHANNEL: disabled
@@ -300,7 +300,7 @@ module auto_scan_engine (
             state            <= `ENG_STATE_IDLE;
             done             <= 1'b0;
             result_pass      <= 1'b0;
-            latency_cycles   <= 8'd0;
+            latency_cycles   <= 12'd0;
             was_injected     <= 1'b0;
             flip_count_a     <= 6'd0;
             flip_count_b     <= 6'd0;   // Always 0 in single-channel mode

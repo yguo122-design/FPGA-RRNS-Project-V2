@@ -29,7 +29,7 @@
 `define THRESH_LEN_STEPS        15      // Burst Length Steps: 1 ~ 15
 `define THRESH_LEN_BITS         4       // ceil(log2(15)) = 4 bits
 `define THRESH_ALGO_COUNT       4       // 4 Algorithms (2NRM, 3NRM, C-RRNS, RS)
-`define THRESH_ALGO_BITS        2       // 2 bits
+`define THRESH_ALGO_BITS        3       // 3 bits (Bug #78 fix: was 2, truncated id=4 to 0)
 
 // ROM Depth Calculation
 // Logical Max Address = (3 * 91 * 15) + (90 * 15) + 14 = 5459

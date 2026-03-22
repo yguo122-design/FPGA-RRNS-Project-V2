@@ -12,12 +12,15 @@ import os
 
 # ================= Configuration Parameters =================
 # Algorithm Definitions: ID, Valid Bit Width (W_valid)
-# IDs must match the Verilog 'algo_id' input encoding
+# IDs must match the Verilog 'algo_id' input encoding (3-bit, 0~7)
+# C-RRNS-MRC and C-RRNS-CRT share the same encoder (W_valid=61) as C-RRNS-MLD
 ALGORITHMS = {
-    '2NRM':    {'w_valid': 41, 'id': 0},
-    '3NRM':    {'w_valid': 48, 'id': 1},
-    'C-RRNS':  {'w_valid': 61, 'id': 2},
-    'RS':      {'w_valid': 48, 'id': 3}
+    '2NRM':        {'w_valid': 41, 'id': 0},
+    '3NRM':        {'w_valid': 48, 'id': 1},
+    'C-RRNS-MLD':  {'w_valid': 61, 'id': 2},  # C-RRNS with MLD decoding
+    'C-RRNS-MRC':  {'w_valid': 61, 'id': 3},  # C-RRNS with MRC decoding (same encoder)
+    'C-RRNS-CRT':  {'w_valid': 61, 'id': 4},  # C-RRNS with CRT decoding (same encoder)
+    'RS':          {'w_valid': 48, 'id': 5},
 }
 
 # BER Test Points: 101 points, from 0% (0.000) to 10% (0.100), step 0.001
@@ -193,10 +196,13 @@ def main():
     # Valid Data: L=1~15 (len_idx 0~14)
     # Illegal Data: L=16 (len_idx 15) -> Must be Zeroed
     
-    ERROR_ROM_DEPTH = 4096  # 2^12
+    # Bug #77 fix: expanded from 12-bit to 13-bit address to support 8 algo_ids.
+    # New: {algo_id[2:0], len_idx[3:0], offset[5:0]} = 13-bit = 8192 depth
+    ERROR_ROM_DEPTH = 8192  # 2^13 (was 4096=2^12)
     OFFSET_BITS = 6
     OFFSET_RANGE = 1 << OFFSET_BITS # 64
     LEN_IDX_BITS = 4
+    ALGO_ID_BITS = 3  # 3-bit algo_id (was 2-bit)
     
     error_data = [0] * ERROR_ROM_DEPTH
     
@@ -204,8 +210,13 @@ def main():
     print(f"      Total Depth: {ERROR_ROM_DEPTH} | Width: 64-bit")
     print(f"      Valid L Range: 1~15 (Indices 0~14)")
     print(f"      Illegal L Range: 16 (Index 15) -> Zeroing...")
+    print(f"      Bug #77 fix: 13-bit address, all 6 algo_ids have correct W_valid")
     
-    for algo_name, params in ALGORITHMS.items():
+    # All algorithms now have their own slot in the 13-bit address space.
+    # algo_id[2:0] directly indexes the correct slot.
+    ERROR_LUT_ALGOS = ALGORITHMS  # All algorithms (no id<=3 filter)
+    
+    for algo_name, params in ERROR_LUT_ALGOS.items():
         algo_id = params['id']
         w_valid = params['w_valid']
         
@@ -214,17 +225,15 @@ def main():
             len_idx = length - 1  # 0 ~ 14
             
             # Max valid start position for this length
-            # If length=3, w_valid=41, max_offset = 38 (indices 0..38 allow 3 bits)
             max_offset = w_valid - length
             
             for offset in range(OFFSET_RANGE):
                 if offset <= max_offset and max_offset >= 0:
                     pattern = generate_error_pattern(length, offset, w_valid)
                 else:
-                    # Offset causes burst to exceed w_valid -> No error injected
                     pattern = 0
                 
-                # Address: {algo_id, len_idx, offset}
+                # Address: {algo_id[1:0], len_idx, offset} (12-bit)
                 addr = (algo_id << (LEN_IDX_BITS + OFFSET_BITS)) | \
                        (len_idx << OFFSET_BITS) | \
                        offset
@@ -235,16 +244,16 @@ def main():
                 error_data[addr] = pattern
         
         # --- B. Explicitly Zero Out Illegal Data (L = 16) ---
-        # Even though design says L<=15, hardware address lines allow len_idx=15.
-        # We explicitly fill these with 0 to ensure Fail-Safe behavior.
-        illegal_len_idx = 15  # Corresponds to L=16
+        illegal_len_idx = 15
         for offset in range(OFFSET_RANGE):
             addr = (algo_id << (LEN_IDX_BITS + OFFSET_BITS)) | \
                    (illegal_len_idx << OFFSET_BITS) | \
                    offset
             error_data[addr] = 0
             
-        print(f"      - {algo_name}: Filled L=1~15, Zeroed L=16")
+        print(f"      - {algo_name} (id={algo_id}): Filled L=1~15, Zeroed L=16")
+    
+    print(f"      All 6 algo_ids now have correct W_valid in error_lut (Bug #77 fixed)")
     
     write_coe_file("error_lut.coe", error_data, radix=16, width=16)
     print(f"      Output dir: {ROM_OUTPUT_DIR}")

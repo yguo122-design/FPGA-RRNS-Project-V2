@@ -16,15 +16,18 @@
 // 1. Configuration Parameters
 // -----------------------------------------------------------------------------
 
-`define DEC_ALGO_BITS         2
+`define DEC_ALGO_BITS         3   // Extended to 3-bit to support 8 algorithms
 `define DEC_DATA_WIDTH        16
 `define DEC_INPUT_BUS_WIDTH   64  // Max width to support all algos
 
-// Algorithm IDs
-`define DEC_ALGO_2NRM         2'd0
-`define DEC_ALGO_3NRM         2'd1
-`define DEC_ALGO_C_RRNS       2'd2
-`define DEC_ALGO_RS           2'd3
+// Algorithm IDs (3-bit, supports up to 8 algorithms)
+`define DEC_ALGO_2NRM         3'd0   // 2NRM-RRNS
+`define DEC_ALGO_3NRM         3'd1   // 3NRM-RRNS
+`define DEC_ALGO_C_RRNS       3'd2   // C-RRNS-MLD (alias for backward compatibility)
+`define DEC_ALGO_CRRNS_MLD    3'd2   // C-RRNS with Maximum Likelihood Decoding
+`define DEC_ALGO_CRRNS_MRC    3'd3   // C-RRNS with Mixed Radix Conversion (reserved)
+`define DEC_ALGO_CRRNS_CRT    3'd4   // C-RRNS with Chinese Remainder Theorem (reserved)
+`define DEC_ALGO_RS           3'd5   // Reed-Solomon (reserved)
 
 // -----------------------------------------------------------------------------
 // 2. Module Interface Macros

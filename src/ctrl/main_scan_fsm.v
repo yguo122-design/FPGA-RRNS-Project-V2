@@ -216,7 +216,7 @@ module main_scan_fsm (
         .clk          (clk),
         .rst_n        (rst_n),
         .req          (rom_req),
-        .algo_id      (2'd`CURRENT_ALGO_ID),
+        .algo_id      (3'd`CURRENT_ALGO_ID),
         .ber_idx      (ber_cnt),
         .burst_len    (burst_len),
         .threshold_val(threshold_val),
@@ -230,7 +230,7 @@ module main_scan_fsm (
     wire        eng_busy;
     wire        eng_done;
     wire        eng_result_pass;
-    wire [7:0]  eng_latency;
+    wire [11:0] eng_latency;      // 12-bit: matches auto_scan_engine latency_cycles
     wire        eng_was_injected;
     wire [5:0]  eng_flip_a;
     // wire [5:0]  eng_flip_b;  // SINGLE-CHANNEL: disabled
@@ -240,8 +240,8 @@ module main_scan_fsm (
         .clk           (clk),
         .rst_n         (rst_n),
         .start         (eng_start),
-        // Algorithm ID is a compile-time constant for this build
-        .algo_id       (2'd`CURRENT_ALGO_ID),
+        // Algorithm ID is a compile-time constant for this build (3-bit)
+        .algo_id       (3'd`CURRENT_ALGO_ID),
         .threshold_val (threshold_val),
         .burst_len     (burst_len),
         .seed_in       (seed_in),
@@ -258,7 +258,7 @@ module main_scan_fsm (
 
     // Latch engine results for use in SAVE_RES state
     reg        res_pass_latch;
-    reg [7:0]  res_latency_latch;
+    reg [11:0] res_latency_latch;  // 12-bit: matches eng_latency width
     reg        res_injected_latch;
     reg [5:0]  res_flip_a_latch;
     reg [5:0]  res_flip_b_latch;
@@ -332,7 +332,7 @@ module main_scan_fsm (
         .rst_n        (rst_n),
         // Control
         .start        (asm_start),
-        .algo_id_in   (2'd`CURRENT_ALGO_ID),
+        .algo_id_in   (3'd`CURRENT_ALGO_ID),
         .mode_id_in   (mode_id),            // FIX Issue1: from ctrl_register_bank.reg_error_mode
         // Memory read interface (176-bit)
         .mem_rd_addr  (asm_mem_rd_addr_w),
@@ -390,7 +390,7 @@ module main_scan_fsm (
             mem_din_a          <= {`STATS_DATA_WIDTH{1'b0}};
             asm_start          <= 1'b0;
             res_pass_latch     <= 1'b0;
-            res_latency_latch  <= 8'd0;
+            res_latency_latch  <= 12'd0;
             res_injected_latch <= 1'b0;
             res_flip_a_latch   <= 6'd0;
             res_flip_b_latch   <= 6'd0;
@@ -512,7 +512,7 @@ module main_scan_fsm (
                             // SINGLE-CHANNEL: only accumulate Channel A flips
                             // acc_flip <= acc_flip + {26'd0, eng_flip_a} + {26'd0, eng_flip_b};
                             acc_flip <= acc_flip + {26'd0, eng_flip_a};
-                            acc_clk  <= acc_clk + {56'd0, eng_latency};
+                            acc_clk  <= acc_clk + {52'd0, eng_latency};  // eng_latency is 12-bit
 
                             // v2.0: Check if we've completed all N trials for this point
                             if (trial_cnt + 32'd1 >= sample_count) begin

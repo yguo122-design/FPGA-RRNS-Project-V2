@@ -3,34 +3,25 @@
 // Description: Top-Level Decoder Wrapper with Algorithm Routing
 //              Part of FPGA Multi-Algorithm Fault-Tolerant Test System
 //              Implements Design Doc Section 2.3.3.3
-// Version: v1.0
+// Version: v2.1 (Compile-macro controlled single-algorithm build)
 //
-// ─────────────────────────────────────────────────────────────────────────────
-// ARCHITECTURE OVERVIEW:
-//   This module provides a unified 64-bit input interface for all decoding
-//   algorithms. The algo_id input selects which decoder is active. All
-//   decoders run in parallel (inputs are broadcast), but only the selected
-//   decoder's outputs are forwarded to the output registers.
+// *** IMPORTANT: ONE ALGORITHM PER BUILD ***
+//   Each implementation must contain ONLY ONE active decoder instance.
+//   This ensures fair resource utilization comparison between algorithms.
 //
-// ALGORITHM ROUTING:
-//   algo_id = 0 (DEC_ALGO_2NRM):   decoder_2nrm  [IMPLEMENTED]
-//   algo_id = 1 (DEC_ALGO_3NRM):   decoder_3nrm  [RESERVED - future]
-//   algo_id = 2 (DEC_ALGO_C_RRNS): decoder_crrns [RESERVED - future]
-//   algo_id = 3 (DEC_ALGO_RS):     decoder_rs    [RESERVED - future]
-//
-// INPUT BUS MAPPING:
-//   residues_in[63:0] is a generic 64-bit bus.
-//   For 2NRM: only bits [40:0] are used (41-bit packed residues).
-//   For future algorithms: bit ranges will be defined in their respective .vh.
-//
-// PIPELINE LATENCY:
-//   Matches the instantiated decoder's latency.
-//   decoder_2nrm: 2 clock cycles (start → valid)
+// BUILD SWITCHING:
+//   Edit ONLY src/interfaces/main_scan_fsm.vh
+//   Uncomment ONE `define BUILD_ALGO_xxx line, comment out all others.
+//   Then run full Implementation in Vivado.
+//   See docs/algo_switch_guide.md for details.
 // =============================================================================
 
 `include "decoder_wrapper.vh"
 `include "decoder_2nrm.vh"
+`include "main_scan_fsm.vh"
 `timescale 1ns / 1ps
+// Note: decoder_3nrm.v is included in the same project source set.
+// No separate `include needed as it defines its own module.
 
 module decoder_wrapper (
     // -------------------------------------------------------------------------
@@ -75,73 +66,112 @@ module decoder_wrapper (
 );
 
     // =========================================================================
-    // 1. decoder_2nrm Instantiation (algo_id = 0)
+    // Decoder Instantiations (controlled by BUILD_ALGO_xxx macros)
+    //   Only ONE decoder is instantiated per build.
+    //   All others are wire-tied to zero via `else branches.
     // =========================================================================
-    // Input adaptation: 2NRM uses 41-bit packed residues (right-aligned in bus)
-    // residues_in[40:0] is passed directly; decoder_2nrm internally unpacks it.
 
+    // --- 2NRM Decoder ---
+`ifdef BUILD_ALGO_2NRM
     wire [`DEC_DATA_WIDTH-1:0] dec_2nrm_data;
     wire                       dec_2nrm_valid;
     wire                       dec_2nrm_uncorr;
-
     decoder_2nrm u_dec_2nrm (
-        .clk          (clk),
-        .rst_n        (rst_n),
-        .start        (start),
-        // Pass full 64-bit bus; decoder_2nrm uses [40:0] internally
-        .residues_in  (residues_in),
-        .data_out     (dec_2nrm_data),
-        .valid        (dec_2nrm_valid),
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_2nrm_data), .valid(dec_2nrm_valid),
         .uncorrectable(dec_2nrm_uncorr)
     );
+`else
+    wire [`DEC_DATA_WIDTH-1:0] dec_2nrm_data  = {`DEC_DATA_WIDTH{1'b0}};
+    wire                       dec_2nrm_valid  = 1'b0;
+    wire                       dec_2nrm_uncorr = 1'b0;
+`endif
 
-    // =========================================================================
-    // 2. Reserved Decoder Placeholders (Future Algorithms)
-    // =========================================================================
-    // These wires are tied to safe defaults until the respective decoders
-    // are implemented. The structure is ready for drop-in instantiation.
-
-    // --- algo_id = 1: 3NRM Decoder (RESERVED) ---
-    // TODO: Instantiate decoder_3nrm here when implemented.
-    // Expected interface:
-    //   decoder_3nrm u_dec_3nrm (
-    //       .clk(clk), .rst_n(rst_n), .start(start),
-    //       .residues_in(residues_in[47:0]),  // 3NRM uses 48-bit
-    //       .data_out(dec_3nrm_data),
-    //       .valid(dec_3nrm_valid),
-    //       .uncorrectable(dec_3nrm_uncorr)
-    //   );
+    // --- 3NRM Decoder ---
+`ifdef BUILD_ALGO_3NRM
+    wire [`DEC_DATA_WIDTH-1:0] dec_3nrm_data;
+    wire                       dec_3nrm_valid;
+    wire                       dec_3nrm_uncorr;
+    decoder_3nrm u_dec_3nrm (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_3nrm_data), .valid(dec_3nrm_valid),
+        .uncorrectable(dec_3nrm_uncorr)
+    );
+`else
     wire [`DEC_DATA_WIDTH-1:0] dec_3nrm_data  = {`DEC_DATA_WIDTH{1'b0}};
     wire                       dec_3nrm_valid  = 1'b0;
     wire                       dec_3nrm_uncorr = 1'b0;
+`endif
 
-    // --- algo_id = 2: C-RRNS Decoder (RESERVED) ---
-    // TODO: Instantiate decoder_crrns here when implemented.
-    // Expected interface:
-    //   decoder_crrns u_dec_crrns (
-    //       .clk(clk), .rst_n(rst_n), .start(start),
-    //       .residues_in(residues_in[60:0]),  // C-RRNS uses 61-bit
-    //       .data_out(dec_crrns_data),
-    //       .valid(dec_crrns_valid),
-    //       .uncorrectable(dec_crrns_uncorr)
-    //   );
-    wire [`DEC_DATA_WIDTH-1:0] dec_crrns_data  = {`DEC_DATA_WIDTH{1'b0}};
-    wire                       dec_crrns_valid  = 1'b0;
-    wire                       dec_crrns_uncorr = 1'b0;
+    // --- C-RRNS-MLD Decoder ---
+`ifdef BUILD_ALGO_CRRNS_MLD
+    wire [`DEC_DATA_WIDTH-1:0] dec_crrns_mld_data;
+    wire                       dec_crrns_mld_valid;
+    wire                       dec_crrns_mld_uncorr;
+    decoder_crrns_mld u_dec_crrns_mld (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_crrns_mld_data), .valid(dec_crrns_mld_valid),
+        .uncorrectable(dec_crrns_mld_uncorr)
+    );
+`else
+    wire [`DEC_DATA_WIDTH-1:0] dec_crrns_mld_data  = {`DEC_DATA_WIDTH{1'b0}};
+    wire                       dec_crrns_mld_valid  = 1'b0;
+    wire                       dec_crrns_mld_uncorr = 1'b0;
+`endif
 
-    // --- algo_id = 3: RS Decoder (RESERVED) ---
-    // TODO: Instantiate decoder_rs here when implemented.
-    // Expected interface:
-    //   decoder_rs u_dec_rs (
-    //       .clk(clk), .rst_n(rst_n), .start(start),
-    //       .residues_in(residues_in[47:0]),  // RS uses 48-bit
-    //       .data_out(dec_rs_data),
-    //       .valid(dec_rs_valid),
-    //       .uncorrectable(dec_rs_uncorr)
-    //   );
+    // --- C-RRNS-MRC Decoder ---
+`ifdef BUILD_ALGO_CRRNS_MRC
+    wire [`DEC_DATA_WIDTH-1:0] dec_crrns_mrc_data;
+    wire                       dec_crrns_mrc_valid;
+    wire                       dec_crrns_mrc_uncorr;
+    decoder_crrns_mrc u_dec_crrns_mrc (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_crrns_mrc_data), .valid(dec_crrns_mrc_valid),
+        .uncorrectable(dec_crrns_mrc_uncorr)
+    );
+`else
+    wire [`DEC_DATA_WIDTH-1:0] dec_crrns_mrc_data  = {`DEC_DATA_WIDTH{1'b0}};
+    wire                       dec_crrns_mrc_valid  = 1'b0;
+    wire                       dec_crrns_mrc_uncorr = 1'b0;
+`endif
+
+    // --- C-RRNS-CRT Decoder ---
+`ifdef BUILD_ALGO_CRRNS_CRT
+    wire [`DEC_DATA_WIDTH-1:0] dec_crrns_crt_data;
+    wire                       dec_crrns_crt_valid;
+    wire                       dec_crrns_crt_uncorr;
+    decoder_crrns_crt u_dec_crrns_crt (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_crrns_crt_data), .valid(dec_crrns_crt_valid),
+        .uncorrectable(dec_crrns_crt_uncorr)
+    );
+`else
+    wire [`DEC_DATA_WIDTH-1:0] dec_crrns_crt_data  = {`DEC_DATA_WIDTH{1'b0}};
+    wire                       dec_crrns_crt_valid  = 1'b0;
+    wire                       dec_crrns_crt_uncorr = 1'b0;
+`endif
+
+    // --- RS Decoder ---
+`ifdef BUILD_ALGO_RS
+    wire [`DEC_DATA_WIDTH-1:0] dec_rs_data;
+    wire                       dec_rs_valid;
+    wire                       dec_rs_uncorr;
+    decoder_rs u_dec_rs (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_rs_data), .valid(dec_rs_valid),
+        .uncorrectable(dec_rs_uncorr)
+    );
+`else
     wire [`DEC_DATA_WIDTH-1:0] dec_rs_data  = {`DEC_DATA_WIDTH{1'b0}};
     wire                       dec_rs_valid  = 1'b0;
     wire                       dec_rs_uncorr = 1'b0;
+`endif
 
     // =========================================================================
     // 3. Output Mux: Route Selected Algorithm's Outputs
@@ -161,19 +191,31 @@ module decoder_wrapper (
                 mux_uncorr = dec_2nrm_uncorr;
             end
             `DEC_ALGO_3NRM: begin
-                // 3NRM not yet implemented — output safe defaults
+                // 3NRM-RRNS decoder (disabled in current build)
                 mux_data   = dec_3nrm_data;
                 mux_valid  = dec_3nrm_valid;
                 mux_uncorr = dec_3nrm_uncorr;
             end
-            `DEC_ALGO_C_RRNS: begin
-                // C-RRNS not yet implemented — output safe defaults
-                mux_data   = dec_crrns_data;
-                mux_valid  = dec_crrns_valid;
-                mux_uncorr = dec_crrns_uncorr;
+            `DEC_ALGO_CRRNS_MLD: begin
+                // C-RRNS-MLD decoder [ACTIVE]
+                mux_data   = dec_crrns_mld_data;
+                mux_valid  = dec_crrns_mld_valid;
+                mux_uncorr = dec_crrns_mld_uncorr;
+            end
+            `DEC_ALGO_CRRNS_MRC: begin
+                // C-RRNS-MRC decoder (reserved)
+                mux_data   = dec_crrns_mrc_data;
+                mux_valid  = dec_crrns_mrc_valid;
+                mux_uncorr = dec_crrns_mrc_uncorr;
+            end
+            `DEC_ALGO_CRRNS_CRT: begin
+                // C-RRNS-CRT decoder (reserved)
+                mux_data   = dec_crrns_crt_data;
+                mux_valid  = dec_crrns_crt_valid;
+                mux_uncorr = dec_crrns_crt_uncorr;
             end
             `DEC_ALGO_RS: begin
-                // RS not yet implemented — output safe defaults
+                // RS decoder (reserved)
                 mux_data   = dec_rs_data;
                 mux_valid  = dec_rs_valid;
                 mux_uncorr = dec_rs_uncorr;

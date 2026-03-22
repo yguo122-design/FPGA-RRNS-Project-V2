@@ -16,15 +16,17 @@ RESULT_DIR = os.path.join(SCRIPT_DIR, 'result')
 # ================= Configuration Constants =================
 DEFAULT_PORT = 'COM8'       # Default serial port (Linux: /dev/ttyUSB0)
 DEFAULT_BAUDRATE = 921600   # Baud rate
-TIMEOUT_SEC = 100.0          # Receive timeout (seconds). FPGA may need time for large sample counts.
+TIMEOUT_SEC = 300.0          # Receive timeout (seconds). FPGA may need time for large sample counts.
 
 # Algorithm Mapping (User Specified Order)
-# 0: 2NRM, 1: 3NRM, 2: C-RRNS, 3: RS
+# 0: 2NRM, 1: 3NRM, 2: C-RRNS-MLD, 3: C-RRNS-MRC, 4: C-RRNS-CRT, 5: RS
 ALGO_MAP = {
     0: "2NRM-RRNS",
     1: "3NRM-RRNS",
-    2: "C-RRNS",
-    3: "RS"
+    2: "C-RRNS-MLD",   # C-RRNS with Maximum Likelihood Decoding
+    3: "C-RRNS-MRC",   # C-RRNS with Mixed Radix Conversion (reserved)
+    4: "C-RRNS-CRT",   # C-RRNS with Chinese Remainder Theorem (reserved)
+    5: "RS"
 }
 
 # Valid codeword bit widths per algorithm (W_valid)
@@ -32,9 +34,24 @@ ALGO_MAP = {
 #   BER_actual = Flip_Count / (Total_Trials * W_valid)
 ALGO_W_VALID = {
     0: 41,   # 2NRM-RRNS: {257,256,61,59,55,53} → 9+8+6+6+6+6 = 41 bits
-    1: 48,   # 3NRM-RRNS: 48 bits
-    2: 61,   # C-RRNS:    61 bits
-    3: 48,   # RS:        48 bits
+    1: 48,   # 3NRM-RRNS: {64,63,65,31,29,23,19,17,11} → 6+6+7+5+5+5+5+5+4 = 48 bits
+    2: 61,   # C-RRNS-MLD: {64,63,65,67,71,73,79,83,89} → 6+6+7+7+7+7+7+7+7 = 61 bits
+    3: 61,   # C-RRNS-MRC: same encoder as MLD, W_valid=61
+    4: 61,   # C-RRNS-CRT: same encoder as MLD, W_valid=61
+    5: 48,   # RS:        48 bits
+}
+
+# Decoder pipeline latency reference (clock cycles, start → valid)
+# Used for estimating test throughput and watchdog timeout sizing.
+# Note: auto_scan_engine.v DEC_WAIT state polls dec_valid, so latency is
+# absorbed automatically. These values are for documentation only.
+ALGO_DEC_LATENCY_CYCLES = {
+    0: 27,   # 2NRM-RRNS: ~27 cycles (15 parallel CRT channels + MLD)
+    1: 842,  # 3NRM-RRNS: 842 cycles (FSM sequential MLD, 84 triplets)
+    2: 842,  # C-RRNS-MLD: 842 cycles (FSM sequential MLD, 84 triplets)
+    3: 10,   # C-RRNS-MRC: ~10 cycles (direct MRC with 3 non-redundant moduli)
+    4: 5,    # C-RRNS-CRT: ~5 cycles (direct CRT with 3 non-redundant moduli)
+    5: 0,    # RS: TBD (depends on Xilinx IP core)
 }
 
 # BER test point mapping: index → BER value

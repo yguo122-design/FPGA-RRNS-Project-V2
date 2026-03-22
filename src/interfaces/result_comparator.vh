@@ -18,13 +18,18 @@
 // -----------------------------------------------------------------------------
 
 // FIFO Depth: Must be >= Max Decoder Latency + Safety Margin
-// Current Max Latency: 2 cycles (2NRM). Set to 16 for safety/future expansion.
+// Current Max Latency: 842 cycles (3NRM FSM). Set to 16 for safety/future expansion.
+// Note: Only 1 entry is ever in the FIFO at a time (single-channel mode),
+// so depth=16 is more than sufficient.
 `define COMP_FIFO_DEPTH       16
 `define COMP_FIFO_ADDR_WIDTH  4   // $clog2(16)
 
 // Data Widths
 `define COMP_DATA_WIDTH       16
-`define COMP_LATENCY_WIDTH    8   // Max measurable latency: 255 cycles
+// LATENCY_WIDTH: Must cover max decoder latency.
+// 3NRM FSM decoder: 842 cycles. Use 12-bit (max 4095 cycles).
+// Note: auto_scan_engine.v latency_cycles port must match this width.
+`define COMP_LATENCY_WIDTH    12  // Max measurable latency: 4095 cycles (covers 3NRM 842 cycles)
 
 // -----------------------------------------------------------------------------
 // 2. Status Codes

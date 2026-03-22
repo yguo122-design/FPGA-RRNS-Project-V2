@@ -17,13 +17,41 @@
 // 1. Configuration Parameters
 // -----------------------------------------------------------------------------
 
-// [IMPORTANT] Compile-time Algorithm Selection
-// The hardware implementation (Encoder/Decoder) is selected via `ifdef in RTL.
-// This ID is stored in the result header so the host knows which algo was tested.
-// Options: 0=2NRM, 1=3NRM, 2=C-RRNS, 3=RS
-// Default to 0 if not defined externally.
-`ifndef CURRENT_ALGO_ID
-    `define CURRENT_ALGO_ID     0
+// =============================================================================
+// [IMPORTANT] Compile-time Algorithm Selection via Build Macro
+// =============================================================================
+// To switch algorithm:
+//   1. Comment out the current `define BUILD_ALGO_xxx line below
+//   2. Uncomment the desired `define BUILD_ALGO_xxx line
+//   3. Run Implementation in Vivado (full re-synthesis required)
+//
+// Only ONE macro should be defined at a time!
+//
+// *** CURRENT BUILD: RS (algo_id=5) ***
+// -----------------------------------------------------------------
+// `define BUILD_ALGO_2NRM        // algo_id=0: 2NRM-RRNS,   41b, t=2,  ~27 cycles
+// `define BUILD_ALGO_3NRM        // algo_id=1: 3NRM-RRNS,   48b, t=3,  ~842 cycles
+// `define BUILD_ALGO_CRRNS_MLD   // algo_id=2: C-RRNS-MLD,  61b, t=3,  ~924 cycles
+// `define BUILD_ALGO_CRRNS_MRC   // algo_id=3: C-RRNS-MRC,  61b, none, ~8 cycles
+// `define BUILD_ALGO_CRRNS_CRT   // algo_id=4: C-RRNS-CRT,  61b, none, ~5 cycles
+`define BUILD_ALGO_RS              // algo_id=5: RS(12,4),    48b, t=4,  ~60 cycles
+// -----------------------------------------------------------------
+
+// Derive CURRENT_ALGO_ID from the build macro (do not edit below)
+`ifdef BUILD_ALGO_2NRM
+    `define CURRENT_ALGO_ID  0
+`elsif BUILD_ALGO_3NRM
+    `define CURRENT_ALGO_ID  1
+`elsif BUILD_ALGO_CRRNS_MLD
+    `define CURRENT_ALGO_ID  2
+`elsif BUILD_ALGO_CRRNS_MRC
+    `define CURRENT_ALGO_ID  3
+`elsif BUILD_ALGO_CRRNS_CRT
+    `define CURRENT_ALGO_ID  4
+`elsif BUILD_ALGO_RS
+    `define CURRENT_ALGO_ID  5
+`else
+    `define CURRENT_ALGO_ID  5  // default: RS
 `endif
 
 // Number of BER points: 0.000 to 0.100, step 0.001

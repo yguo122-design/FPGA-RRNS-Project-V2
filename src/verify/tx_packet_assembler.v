@@ -65,8 +65,8 @@ module tx_packet_assembler (
     // start: Single-cycle pulse to begin packet assembly and transmission.
     // Ignored if busy=1.
 
-    input  wire [1:0]  algo_id_in,
-    // algo_id_in: Algorithm ID to embed in Global Info field (0~3).
+    input  wire [2:0]  algo_id_in,
+    // algo_id_in: Algorithm ID to embed in Global Info field (0~5, 3-bit, Bug #78 fix).
 
     input  wire [1:0]  mode_id_in,
     // mode_id_in: Mode ID to embed in Global Info field (0/1).
@@ -115,7 +115,7 @@ module tx_packet_assembler (
     // =========================================================================
 
     // Latched parameters (captured at start)
-    reg [1:0] algo_id_latch;
+    reg [2:0] algo_id_latch;  // 3-bit (Bug #78 fix: was 2-bit, truncated id=4 to 0)
     reg [1:0] mode_id_latch;
 
     // Point counter: 0~90 (current BER point being serialized)
@@ -207,7 +207,7 @@ module tx_packet_assembler (
             ginfo_cnt      <= 2'd0;
             sync_idx       <= 1'b0;
             entry_latch    <= {`STATS_DATA_WIDTH{1'b0}};
-            algo_id_latch  <= 2'd0;
+            algo_id_latch  <= 3'd0;
             mode_id_latch  <= 2'd0;
             rd_wait_done   <= 1'b0;
 

@@ -36,9 +36,10 @@
 //   - No RSTA pin (reset not used)
 //
 // ADDRESS MAPPING (Section 2.3.2.5):
-//   12-bit address = {algo_id[1:0], (burst_len-1)[3:0], random_offset[5:0]}
-//   - bits[11:10]: algo_id    (0=2NRM, 1=3NRM, 2=C-RRNS, 3=RS)
+//   13-bit address = {algo_id[2:0], (burst_len-1)[3:0], random_offset[5:0]}
+//   - bits[12:10]: algo_id    (0=2NRM, 1=3NRM, 2=C-RRNS-MLD, 3=C-RRNS-MRC, 4=C-RRNS-CRT, 5=RS)
 //                  NOTE: Matches gen_rom.py ALGORITHMS dict order exactly.
+//   Bug #77 fix: expanded from 12-bit to 13-bit to support 8 algo_ids (was 4).
 //                  Previous comment had C-RRNS and RS swapped — now corrected.
 //   - bits[9:6]:   burst_len-1 (0~14, corresponding to L=1~15)
 //   - bits[5:0]:   random_offset (0~63, from LFSR output)
@@ -128,10 +129,10 @@ module error_injector_unit (
                              {{(`INJ_BURST_LEN_WIDTH-1){1'b0}}, 1'b1} : // 0 → clamp to 1
                              burst_len;                                   // 1~15 → pass through
 
-    // Total address width: 2 + 4 + 6 = 12 bits = INJ_ROM_ADDR_WIDTH ✓
+    // Total address width: 3 + 4 + 6 = 13 bits = INJ_ROM_ADDR_WIDTH ✓ (Bug #77 fix)
     wire [`INJ_ROM_ADDR_WIDTH-1:0] rom_addr;
     assign rom_addr = {
-        algo_id,                                              // bits[11:10]: algo partition
+        algo_id,                                              // bits[12:10]: algo partition (3-bit)
         burst_len_safe - {{(`INJ_BURST_LEN_WIDTH-1){1'b0}}, 1'b1}, // bits[9:6]: burst index (L-1), safe
         random_offset                                         // bits[5:0]:   random position
     };
