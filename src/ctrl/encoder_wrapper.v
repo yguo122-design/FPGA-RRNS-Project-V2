@@ -86,8 +86,16 @@ module encoder_wrapper (
     //    All others are wire-tied to zero via `else branches.
     // =========================================================================
 
-    // --- 2NRM Encoder ---
+    // --- 2NRM Encoder (also used by 2NRM-Serial, algo_id=6) ---
 `ifdef BUILD_ALGO_2NRM
+    encoder_2nrm u_enc_2nrm (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .data_in_A(data_in_A), .data_in_B(data_in_B),
+        .residues_out_A(out_2nrm_A), .residues_out_B(out_2nrm_B),
+        .done(done_2nrm)
+    );
+`elsif BUILD_ALGO_2NRM_SERIAL
+    // 2NRM-Serial uses the same encoder as 2NRM-Parallel (identical codeword format)
     encoder_2nrm u_enc_2nrm (
         .clk(clk), .rst_n(rst_n), .start(start),
         .data_in_A(data_in_A), .data_in_B(data_in_B),
@@ -230,6 +238,13 @@ module encoder_wrapper (
                     codeword_A <= {192'd0, out_rs_A[63:0]};
                     codeword_B <= 256'd0;
                     cw_len_A   <= 8'd48;
+                    cw_len_B   <= 8'd0;
+                end
+                3'd6: begin
+                    // 2NRM-Serial: same encoder output as 2NRM-Parallel (W_valid=41)
+                    codeword_A <= {192'd0, out_2nrm_A[63:0]};
+                    codeword_B <= 256'd0;
+                    cw_len_A   <= 8'd41;
                     cw_len_B   <= 8'd0;
                 end
                 default: begin

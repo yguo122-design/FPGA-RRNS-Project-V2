@@ -86,7 +86,7 @@
 *   **Usage**: Do NOT modify core algorithm logic unless fixing a bug. Use these as references for interface adaptation in `decoder_wrapper`.
 *   **RS Algorithm**: Prefer Xilinx RS IP Core (with wrapper). Fallback to open-source core if IP unavailable.
 
-## 6. Development Rules for AI (Cline/Claude)
+## 6. Development Rules
 1.  **No Hallucinated IPs**: When instantiating BRAM or FIFO, use Xilinx primitives (`RAMB18E1`) or XPM libraries with explicit parameters. Do not invent port names.
 2.  **Bit-Width Strictness**: Always define parameters for widths (e.g., `localparam STATS_WIDTH = 176;`). Never hardcode magic numbers like `175` or `180`.
 3.  **Timing Awareness**: If generating complex combinational logic (e.g., GF multiplication), explicitly ask: "Does this meet 100MHz? Should I add pipeline registers?"

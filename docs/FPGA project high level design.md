@@ -2166,6 +2166,72 @@ decoder_crrns_mld.v（新建，从 decoder_crrns.v 重命名）
 
 ---
 
+## 📝 版本修订记录 - v2.1 (2026-03-23)
+
+**主要变更：新增 2NRM-RRNS-Serial（顺序 FSM MLD）解码器，algo_id=6，用于架构对比研究**
+
+#### 核心变更
+
+本次新增 2NRM-RRNS 算法的串行 FSM 实现（`decoder_2nrm_serial.v`），作为现有并行版本（algo_id=0）的串行对应实现，专为论文中的资源-延迟权衡对比研究而设计。
+
+| 参数 | 旧值 (v2.0) | 新值 (v2.1) |
+|------|------------|------------|
+| 算法数量 | 6 种 (algo_id 0~5) | **7 种 (algo_id 0~6)** |
+| 新增算法 | — | **2NRM-RRNS-Serial (id=6)** |
+| threshold_table 深度 | 6×101×15=9090 | **7×101×15=10605** |
+| error_lut 深度 | 8192（不变） | **8192（不变）** |
+| blk_mem_gen_0 Depth | 9090 | **10605** |
+
+#### 新增算法说明
+
+**2NRM-RRNS-Serial（algo_id=6）**：
+- **架构**：顺序 FSM MLD，遍历 C(6,2)=15 个模数对，每对枚举 k=0~4 个候选值（X₀ + k×PERIOD）
+- **模数集**：{257, 256, 61, 59, 55, 53}，W_valid=41，纠错能力 t=2（与并行版相同）
+- **编码器**：复用 `encoder_2nrm`（与并行版完全相同）
+- **延迟**：~225 周期（典型），~405 周期（最坏情况）
+- **资源**：预计 ~2-3% LUT，~1-2% FF（vs 并行版 22% LUT，29% FF）
+
+#### 对比研究价值
+
+| 对比维度 | 2NRM-Parallel (id=0) | 2NRM-Serial (id=6) |
+|---------|---------------------|-------------------|
+| 解码架构 | 15路全并行 MLD | 顺序 FSM，15对×5候选 |
+| 延迟 | ~27 周期 | ~225 周期（典型）|
+| LUT 占用 | ~22% | ~2-3% |
+| FF 占用 | ~29% | ~1-2% |
+| BER 性能 | t=2，与 Serial 相同 | t=2，与 Parallel 相同 |
+
+#### 更新的 algo_id 映射（3-bit，0~6）
+
+| algo_id | 算法名称 | 解码架构 | W_valid | 延迟 |
+|---------|---------|---------|---------|------|
+| 0 | 2NRM-RRNS | 并行 MLD（15路） | 41 | ~27 周期 |
+| 1 | 3NRM-RRNS | 顺序 FSM（84组） | 48 | ~851 周期 |
+| 2 | C-RRNS-MLD | 顺序 FSM（84组） | 61 | ~935 周期 |
+| 3 | C-RRNS-MRC | 直接 MRC | 61 | ~16 周期 |
+| 4 | C-RRNS-CRT | 直接 CRT | 61 | ~14 周期 |
+| 5 | RS | IP 核 | 48 | ~143 周期 |
+| **6** | **2NRM-RRNS-Serial** | **顺序 FSM（15对×5候选）** | **41** | **~225 周期** |
+
+#### 修改文件
+
+| 文件 | 变更 |
+|------|------|
+| `src/algo_wrapper/decoder_2nrm_serial.v`（新建） | 串行 FSM MLD 解码器 v1.1，含多候选枚举（k=0~4）和 PERIOD LUT |
+| `src/interfaces/decoder_wrapper.vh` | 新增 `DEC_ALGO_2NRM_SERIAL = 3'd6` |
+| `src/algo_wrapper/decoder_wrapper.v` | 新增 `BUILD_ALGO_2NRM_SERIAL` 实例化分支 + output mux case |
+| `src/ctrl/encoder_wrapper.v` | 新增 `BUILD_ALGO_2NRM_SERIAL` 分支（复用 encoder_2nrm）|
+| `src/interfaces/main_scan_fsm.vh` | 新增 `BUILD_ALGO_2NRM_SERIAL` 宏；`CURRENT_ALGO_ID=6` 分支 |
+| `src/PCpython/gen_rom.py` | 新增 `'2NRM-Serial': {'w_valid': 41, 'id': 6}` |
+| `src/PCpython/py_controller_main.py` | 新增 `ALGO_MAP[6]="2NRM-RRNS-Serial"`，`ALGO_W_VALID[6]=41` |
+| `src/interfaces/rom_threshold_ctrl.vh` | `THRESH_ROM_LOGICAL_DEPTH` 9090→**10605**，`THRESH_ALGO_COUNT` 6→**7** |
+| `src/ROM/threshold_table.coe`（重新生成） | 深度 9090→**10605** |
+| `src/PCpython/compare_ber_curves.py` | 新增 2NRM-RRNS-Serial 支持；2NRM-RRNS 图例改为 2NRM-RRNS-Parallel；输出文件名加时间戳；生成前自动删除旧图 |
+
+**状态：** v2.1 Ready for Implementation（需重新综合，blk_mem_gen_0 Depth 更新为 10605）
+
+---
+
 ## 📝 版本修订记录 - v2.0 (2026-03-23)
 
 **主要变更：新增编码器/解码器周期数测量，数据格式从 176-bit 扩展到 240-bit**

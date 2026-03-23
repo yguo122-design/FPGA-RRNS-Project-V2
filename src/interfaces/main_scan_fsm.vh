@@ -29,12 +29,13 @@
 //
 // *** CURRENT BUILD: RS (algo_id=5) ***
 // -----------------------------------------------------------------
-// `define BUILD_ALGO_2NRM        // algo_id=0: 2NRM-RRNS,   41b, t=2,  ~27 cycles
-// `define BUILD_ALGO_3NRM        // algo_id=1: 3NRM-RRNS,   48b, t=3,  ~842 cycles
-// `define BUILD_ALGO_CRRNS_MLD   // algo_id=2: C-RRNS-MLD,  61b, t=3,  ~924 cycles
-// `define BUILD_ALGO_CRRNS_MRC   // algo_id=3: C-RRNS-MRC,  61b, none, ~8 cycles
- `define BUILD_ALGO_CRRNS_CRT   // algo_id=4: C-RRNS-CRT,  61b, none, ~5 cycles
-//  `define BUILD_ALGO_RS              // algo_id=5: RS(12,4),    48b, t=4,  ~60 cycles
+// `define BUILD_ALGO_2NRM        // algo_id=0: 2NRM-RRNS,        41b, t=2, ~27 cycles  (parallel MLD)
+// `define BUILD_ALGO_3NRM        // algo_id=1: 3NRM-RRNS,        48b, t=3, ~842 cycles
+// `define BUILD_ALGO_CRRNS_MLD   // algo_id=2: C-RRNS-MLD,       61b, t=3, ~924 cycles
+// `define BUILD_ALGO_CRRNS_MRC   // algo_id=3: C-RRNS-MRC,       61b, none, ~8 cycles
+// `define BUILD_ALGO_CRRNS_CRT   // algo_id=4: C-RRNS-CRT,       61b, none, ~5 cycles
+// `define BUILD_ALGO_RS          // algo_id=5: RS(12,4),          48b, t=4, ~60 cycles
+ `define BUILD_ALGO_2NRM_SERIAL // algo_id=6: 2NRM-RRNS-Serial, 41b, t=2, ~150 cycles (sequential FSM MLD)
 // -----------------------------------------------------------------
 
 // Derive CURRENT_ALGO_ID from the build macro (do not edit below)
@@ -50,6 +51,8 @@
     `define CURRENT_ALGO_ID  4
 `elsif BUILD_ALGO_RS
     `define CURRENT_ALGO_ID  5
+`elsif BUILD_ALGO_2NRM_SERIAL
+    `define CURRENT_ALGO_ID  6
 `else
     `define CURRENT_ALGO_ID  5  // default: RS
 `endif

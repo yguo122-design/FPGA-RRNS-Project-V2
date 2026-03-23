@@ -16,8 +16,8 @@
 //   - Component:  blk_mem_gen_0  (Vivado Block Memory Generator v8.4)
 //   - COE File:   src/ROM/threshold_table.coe
 //   - Data Width: 32 bits
-//   - Depth:      5460 entries  (4 * 91 * 15)
-//   - Addr Width: 13 bits       (ceil(log2(5460)) = 13)
+//   - Depth:      9090 entries  (6 * 101 * 15)
+//   - Addr Width: 14 bits       (ceil(log2(9090)) = 14, 2^14=16384 > 9090)
 //   - Read Mode:  WRITE_FIRST with output register enabled
 //   - Read Latency: 1 clock cycle (BRAM primitive register)
 //   - ENA Pin:    Present (Use_ENA_Pin = true)
@@ -28,14 +28,14 @@
 // ADDRESS MAPPING (Must match gen_rom.py exactly):
 //   Python formula:
 //     addr = (algo_id * BER_POINTS * NUM_BURST_STEPS) + (ber_idx * NUM_BURST_STEPS) + (burst_len - 1)
-//          = (algo_id * 91 * 15) + (ber_idx * 15) + (burst_len - 1)
-//          = (algo_id * 1365)    + (ber_idx * 15)  + (burst_len - 1)
+//          = (algo_id * 101 * 15) + (ber_idx * 15) + (burst_len - 1)
+//          = (algo_id * 1515)     + (ber_idx * 15)  + (burst_len - 1)
 //
 //   This is a LINEAR PACKED structure — NOT bit-concatenation.
 //   Verilog must implement this arithmetic to match the Python script.
 //
-//   Address range: 0 ~ 5459 (4 * 91 * 15 = 5460 valid entries)
-//   Physical ROM depth: 5460 (IP core configured exactly to this depth)
+//   Address range: 0 ~ 9089 (6 * 101 * 15 = 9090 valid entries)
+//   Physical ROM depth: 9090 (IP core configured exactly to this depth)
 //
 // TIMING (Request-Valid Handshake):
 //   Cycle N:   req=1, address inputs stable → ena=1 sent to BRAM
@@ -45,7 +45,7 @@
 //    which adds exactly 1 register stage inside the BRAM primitive.)
 //
 // SAFETY GUARD:
-//   If ber_idx >= 91 or burst_len == 0, threshold_val is forced to 0.
+//   If ber_idx >= 101 or burst_len == 0, threshold_val is forced to 0.
 //   This prevents accidental injection from out-of-range inputs.
 // =============================================================================
 
@@ -96,16 +96,16 @@ module rom_threshold_ctrl (
     // =========================================================================
     // Address Calculation (Linear Packed — Must Match gen_rom.py)
     // =========================================================================
-    // Python: addr = (algo_id * 1365) + (ber_idx * 15) + (burst_len - 1)
+    // Python: addr = (algo_id * 1515) + (ber_idx * 15) + (burst_len - 1)
     //
     // Verilog implementation uses arithmetic (not bit-concatenation) because
-    // BER_POINTS=91 and BURST_STEPS=15 are not powers of 2.
+    // BER_POINTS=101 and BURST_STEPS=15 are not powers of 2.
     //
     // Intermediate widths:
-    //   algo_id * 1365: max = 3 * 1365 = 4095 → needs 12 bits
-    //   ber_idx * 15:   max = 90 * 15  = 1350 → needs 11 bits
+    //   algo_id * 1515: max = 5 * 1515 = 7575 → needs 13 bits
+    //   ber_idx * 15:   max = 100 * 15 = 1500 → needs 11 bits
     //   burst_len - 1:  max = 14       → needs 4 bits
-    //   Total max addr: 4095 + 1350 + 14 = 5459 → needs 13 bits ✓
+    //   Total max addr: 7575 + 1500 + 14 = 9089 → needs 14 bits ✓
 
     // Constants matching gen_rom.py
     localparam ALGO_STRIDE = `THRESH_BER_POINTS * `THRESH_LEN_STEPS; // 101 * 15 = 1515
@@ -116,17 +116,17 @@ module rom_threshold_ctrl (
     wire addr_valid; // Asserted when all inputs are within legal range
 
     // Input validity check (Safety Guard):
-    //   ber_idx must be 0~90 (< 91)
+    //   ber_idx must be 0~100 (< 101)
     //   burst_len must be 1~15 (non-zero)
     assign addr_valid = (ber_idx < `THRESH_BER_POINTS) && (burst_len != 4'd0);
 
     // Linear address calculation matching gen_rom.py formula:
-    //   addr = (algo_id * 1365) + (ber_idx * 15) + (burst_len - 1)
+    //   addr = (algo_id * 1515) + (ber_idx * 15) + (burst_len - 1)
     assign rom_addr_comb = addr_valid ?
         (({11'b0, algo_id} * ALGO_STRIDE) +
-         ({6'b0, ber_idx}  * BER_STRIDE)  +
-         ({9'b0, burst_len} - 13'd1))
-        : 13'd0;
+         ({7'b0, ber_idx}  * BER_STRIDE)  +
+         ({10'b0, burst_len} - 14'd1))
+        : 14'd0;
 
     // =========================================================================
     // TIMING FIX: Register the address before sending to BRAM

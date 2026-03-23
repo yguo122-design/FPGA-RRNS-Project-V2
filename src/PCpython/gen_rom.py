@@ -15,12 +15,13 @@ import os
 # IDs must match the Verilog 'algo_id' input encoding (3-bit, 0~7)
 # C-RRNS-MRC and C-RRNS-CRT share the same encoder (W_valid=61) as C-RRNS-MLD
 ALGORITHMS = {
-    '2NRM':        {'w_valid': 41, 'id': 0},
-    '3NRM':        {'w_valid': 48, 'id': 1},
-    'C-RRNS-MLD':  {'w_valid': 61, 'id': 2},  # C-RRNS with MLD decoding
-    'C-RRNS-MRC':  {'w_valid': 61, 'id': 3},  # C-RRNS with MRC decoding (same encoder)
-    'C-RRNS-CRT':  {'w_valid': 61, 'id': 4},  # C-RRNS with CRT decoding (same encoder)
-    'RS':          {'w_valid': 48, 'id': 5},
+    '2NRM':           {'w_valid': 41, 'id': 0},
+    '3NRM':           {'w_valid': 48, 'id': 1},
+    'C-RRNS-MLD':     {'w_valid': 61, 'id': 2},  # C-RRNS with MLD decoding
+    'C-RRNS-MRC':     {'w_valid': 61, 'id': 3},  # C-RRNS with MRC decoding (same encoder)
+    'C-RRNS-CRT':     {'w_valid': 61, 'id': 4},  # C-RRNS with CRT decoding (same encoder)
+    'RS':             {'w_valid': 48, 'id': 5},
+    '2NRM-Serial':    {'w_valid': 41, 'id': 6},  # 2NRM sequential FSM MLD (same encoder/W_valid as 2NRM)
 }
 
 # BER Test Points: 101 points, from 0% (0.000) to 10% (0.100), step 0.001

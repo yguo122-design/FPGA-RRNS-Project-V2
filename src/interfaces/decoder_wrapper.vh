@@ -28,6 +28,7 @@
 `define DEC_ALGO_CRRNS_MRC    3'd3   // C-RRNS with Mixed Radix Conversion (reserved)
 `define DEC_ALGO_CRRNS_CRT    3'd4   // C-RRNS with Chinese Remainder Theorem (reserved)
 `define DEC_ALGO_RS           3'd5   // Reed-Solomon (reserved)
+`define DEC_ALGO_2NRM_SERIAL  3'd6   // 2NRM-RRNS Sequential FSM MLD (serial counterpart of DEC_ALGO_2NRM)
 
 // -----------------------------------------------------------------------------
 // 2. Module Interface Macros

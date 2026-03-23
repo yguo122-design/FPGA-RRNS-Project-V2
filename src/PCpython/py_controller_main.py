@@ -23,10 +23,11 @@ TIMEOUT_SEC = 300.0          # Receive timeout (seconds). FPGA may need time for
 ALGO_MAP = {
     0: "2NRM-RRNS",
     1: "3NRM-RRNS",
-    2: "C-RRNS-MLD",   # C-RRNS with Maximum Likelihood Decoding
-    3: "C-RRNS-MRC",   # C-RRNS with Mixed Radix Conversion (reserved)
-    4: "C-RRNS-CRT",   # C-RRNS with Chinese Remainder Theorem (reserved)
-    5: "RS"
+    2: "C-RRNS-MLD",        # C-RRNS with Maximum Likelihood Decoding
+    3: "C-RRNS-MRC",        # C-RRNS with Mixed Radix Conversion (reserved)
+    4: "C-RRNS-CRT",        # C-RRNS with Chinese Remainder Theorem (reserved)
+    5: "RS",
+    6: "2NRM-RRNS-Serial",  # 2NRM sequential FSM MLD (serial counterpart of algo_id=0)
 }
 
 # Valid codeword bit widths per algorithm (W_valid)
@@ -39,6 +40,7 @@ ALGO_W_VALID = {
     3: 61,   # C-RRNS-MRC: same encoder as MLD, W_valid=61
     4: 61,   # C-RRNS-CRT: same encoder as MLD, W_valid=61
     5: 48,   # RS:        48 bits
+    6: 41,   # 2NRM-RRNS-Serial: same encoder as 2NRM, W_valid=41
 }
 
 # Decoder pipeline latency reference (clock cycles, start → valid)
@@ -417,9 +419,9 @@ def get_user_input() -> Tuple[int, int, int, int]:
         for k, v in ALGO_MAP.items():
             print(f"  [{k}] {v}")
         try:
-            algo_id = int(input("Enter index (0-3): "))
+            algo_id = int(input("Enter index (0-6): "))
             if algo_id not in ALGO_MAP:
-                print("[ERROR] Invalid input. Index must be between 0 and 3.")
+                print("[ERROR] Invalid input. Index must be between 0 and 6.")
                 continue
         except ValueError:
             print("[ERROR] Input must be an integer.")

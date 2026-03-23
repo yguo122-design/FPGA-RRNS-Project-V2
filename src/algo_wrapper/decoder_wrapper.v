@@ -173,6 +173,23 @@ module decoder_wrapper (
     wire                       dec_rs_uncorr = 1'b0;
 `endif
 
+    // --- 2NRM Serial Decoder (Sequential FSM MLD, algo_id=6) ---
+`ifdef BUILD_ALGO_2NRM_SERIAL
+    wire [`DEC_DATA_WIDTH-1:0] dec_2nrm_serial_data;
+    wire                       dec_2nrm_serial_valid;
+    wire                       dec_2nrm_serial_uncorr;
+    decoder_2nrm_serial u_dec_2nrm_serial (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_2nrm_serial_data), .valid(dec_2nrm_serial_valid),
+        .uncorrectable(dec_2nrm_serial_uncorr)
+    );
+`else
+    wire [`DEC_DATA_WIDTH-1:0] dec_2nrm_serial_data  = {`DEC_DATA_WIDTH{1'b0}};
+    wire                       dec_2nrm_serial_valid  = 1'b0;
+    wire                       dec_2nrm_serial_uncorr = 1'b0;
+`endif
+
     // =========================================================================
     // 3. Output Mux: Route Selected Algorithm's Outputs
     // =========================================================================
@@ -219,6 +236,12 @@ module decoder_wrapper (
                 mux_data   = dec_rs_data;
                 mux_valid  = dec_rs_valid;
                 mux_uncorr = dec_rs_uncorr;
+            end
+            `DEC_ALGO_2NRM_SERIAL: begin
+                // 2NRM-RRNS Serial FSM decoder (algo_id=6)
+                mux_data   = dec_2nrm_serial_data;
+                mux_valid  = dec_2nrm_serial_valid;
+                mux_uncorr = dec_2nrm_serial_uncorr;
             end
             default: begin
                 mux_data   = {`DEC_DATA_WIDTH{1'b0}};

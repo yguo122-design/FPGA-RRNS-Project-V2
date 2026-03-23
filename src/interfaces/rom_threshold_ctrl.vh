@@ -4,13 +4,13 @@
 //              Complies with Design Doc v1.61 Section 2.3.2.4 & 2.3.2.5
 //
 // Address Mapping Logic (Derived from gen_rom.py & Doc 2.3.2.4):
-//   Addr = (algo_id * 91 * 15) + (ber_idx * 15) + (burst_len - 1)
+//   Addr = (algo_id * 101 * 15) + (ber_idx * 15) + (burst_len - 1)
 //   Constants:
-//     - BER_POINTS = 91 (Indices 0~90)
+//     - BER_POINTS = 101 (Indices 0~100, BER 0.000~0.100)
 //     - BURST_STEPS = 15 (Lengths 1~15 mapped to 0~14)
-//     - ALGO_COUNT = 4
-//   Total Logical Depth = 4 * 91 * 15 = 5460 entries.
-//   Physical Address Width = 13 bits (2^13 = 8192 > 5460).
+//     - ALGO_COUNT = 6
+//   Total Logical Depth = 6 * 101 * 15 = 9090 entries.
+//   Physical Address Width = 14 bits (2^14 = 16384 > 9090).
 // =============================================================================
 
 `ifndef ROM_THRESHOLD_CTRL_VH
@@ -28,16 +28,16 @@
 `define THRESH_BER_BITS         7       // ceil(log2(101)) = 7 bits (2^7=128 > 101)
 `define THRESH_LEN_STEPS        15      // Burst Length Steps: 1 ~ 15
 `define THRESH_LEN_BITS         4       // ceil(log2(15)) = 4 bits
-`define THRESH_ALGO_COUNT       4       // 4 Algorithms (2NRM, 3NRM, C-RRNS, RS)
-`define THRESH_ALGO_BITS        3       // 3 bits (Bug #78 fix: was 2, truncated id=4 to 0)
+`define THRESH_ALGO_COUNT       7       // 7 Algorithms (2NRM, 3NRM, C-RRNS-MLD/MRC/CRT, RS, 2NRM-Serial)
+`define THRESH_ALGO_BITS        3       // 3 bits (supports algo_id 0~6)
 
 // ROM Depth Calculation
-// Logical Max Address = (3 * 91 * 15) + (90 * 15) + 14 = 5459
-// Total Entries = 5460
-`define THRESH_ROM_LOGICAL_DEPTH 5460
+// Logical Max Address = (6 * 101 * 15) + (100 * 15) + 14 = 10604
+// Total Entries = 7 * 101 * 15 = 10605
+`define THRESH_ROM_LOGICAL_DEPTH 10605
 
-// Physical Address Width: Need 13 bits to cover 5460 entries (2^12=4096 is too small)
-`define THRESH_ROM_ADDR_WIDTH   13
+// Physical Address Width: Need 14 bits to cover 10605 entries (2^13=8192 is too small, 2^14=16384 > 10605)
+`define THRESH_ROM_ADDR_WIDTH   14
 
 // COE File Path (relative to Vivado project simulation working directory,
 // OR absolute path for robustness).
