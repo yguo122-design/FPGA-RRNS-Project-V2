@@ -30,17 +30,15 @@
 //                                              ↓ (ber_cnt == 91)
 //                                           PREP_UPLOAD → DO_UPLOAD → FINISH → IDLE
 //
-// RESULT PACKING FORMAT (64-bit per entry, per main_scan_fsm.vh):
-//   [63:56] : BER_Idx        (8-bit, value = ber_cnt, 0~90)
-//   [55:54] : Algo_ID        (2-bit, constant = `CURRENT_ALGO_ID)
-//   [53:48] : Reserved       (6-bit, 0)
-//   [47:40] : Flip_Count_A   (8-bit, from auto_scan_engine)
-//   [39:32] : Flip_Count_B   (8-bit, from auto_scan_engine)
-//   [31:24] : Latency_Cycles (8-bit, from auto_scan_engine)
-//   [23:08] : Reserved       (16-bit, 0)
-//   [07]    : Was_Injected   (1-bit, from auto_scan_engine)
-//   [06]    : Pass/Fail      (1-bit, 1=Pass, from auto_scan_engine)
-//   [05:00] : Reserved       (6-bit, 0)
+// RESULT PACKING FORMAT (240-bit per entry, per mem_stats_array.vh v3.0):
+//   [239:232] BER_Index          (8-bit,  value = ber_cnt, 0~100)
+//   [231:200] Success_Count      (32-bit, Uint32, cumulative pass count)
+//   [199:168] Fail_Count         (32-bit, Uint32, cumulative fail count)
+//   [167:136] Actual_Flip_Count  (32-bit, Uint32, total bits flipped)
+//   [135:72]  Clk_Count          (64-bit, Uint64, total trial clock cycles)
+//   [71:40]   Enc_Clk_Count      (32-bit, Uint32, total encoder clock cycles)
+//   [39:8]    Dec_Clk_Count      (32-bit, Uint32, total decoder clock cycles)
+//   [7:0]     Reserved           (8-bit,  0x00)
 // =============================================================================
 
 `include "main_scan_fsm.vh"
@@ -230,7 +228,9 @@ module main_scan_fsm (
     wire        eng_busy;
     wire        eng_done;
     wire        eng_result_pass;
-    wire [11:0] eng_latency;      // 12-bit: matches auto_scan_engine latency_cycles
+    wire [11:0] eng_latency;      // 12-bit: total trial latency
+    wire [11:0] eng_enc_latency;  // 12-bit: encoder latency
+    wire [11:0] eng_dec_latency;  // 12-bit: decoder latency
     wire        eng_was_injected;
     wire [5:0]  eng_flip_a;
     // wire [5:0]  eng_flip_b;  // SINGLE-CHANNEL: disabled
@@ -250,6 +250,8 @@ module main_scan_fsm (
         .done          (eng_done),
         .result_pass   (eng_result_pass),
         .latency_cycles(eng_latency),
+        .enc_latency   (eng_enc_latency),
+        .dec_latency   (eng_dec_latency),
         .was_injected  (eng_was_injected),
         .flip_count_a  (eng_flip_a),
         .flip_count_b  (),              // SINGLE-CHANNEL: not connected (output ignored)
@@ -283,13 +285,15 @@ module main_scan_fsm (
     reg [31:0] acc_success;   // Cumulative pass count for current BER point
     reg [31:0] acc_fail;      // Cumulative fail count for current BER point
     reg [31:0] acc_flip;      // Cumulative flip count for current BER point
-    reg [63:0] acc_clk;       // Cumulative clock cycles for current BER point
+    reg [63:0] acc_clk;       // Cumulative total clock cycles for current BER point
+    reg [31:0] acc_enc_clk;   // Cumulative encoder clock cycles for current BER point
+    reg [31:0] acc_dec_clk;   // Cumulative decoder clock cycles for current BER point
     reg [31:0] trial_cnt;     // Counts trials within current BER point (0 ~ sample_count-1)
 
     // =========================================================================
-    // 5b. Memory Statistics Array Instance (REFACTOR v2.0)
+    // 5b. Memory Statistics Array Instance (v3.0)
     // =========================================================================
-    // v2.0: 176-bit direct-addressed RAM (91 entries).
+    // v3.0: 240-bit direct-addressed RAM (101 entries).
     // Write address = ber_cnt (driven by FSM, not internal pointer).
     // Read port driven by tx_packet_assembler.
 
@@ -313,9 +317,9 @@ module main_scan_fsm (
     );
 
     // =========================================================================
-    // 6. TX Packet Assembler Instance (REFACTOR v2.0)
+    // 6. TX Packet Assembler Instance (v3.0)
     // =========================================================================
-    // v2.0: assembler reads 176-bit entries from mem_stats_array.
+    // v3.0: assembler reads 240-bit entries from mem_stats_array.
     // mem_stats_array read port is synchronous (1-cycle latency).
     // The assembler's READ_WAIT sub-state handles this latency internally.
 
@@ -334,9 +338,9 @@ module main_scan_fsm (
         .start        (asm_start),
         .algo_id_in   (3'd`CURRENT_ALGO_ID),
         .mode_id_in   (mode_id),            // FIX Issue1: from ctrl_register_bank.reg_error_mode
-        // Memory read interface (176-bit)
+        // Memory read interface (240-bit)
         .mem_rd_addr  (asm_mem_rd_addr_w),
-        .mem_rd_data  (mem_dout_b_w),       // 176-bit from mem_stats_array port B
+        .mem_rd_data  (mem_dout_b_w),       // 240-bit from mem_stats_array port B
         // TX output
         .tx_valid     (tx_valid),
         .tx_data      (tx_data),
@@ -347,27 +351,32 @@ module main_scan_fsm (
     );
 
     // =========================================================================
-    // 7. 176-bit Statistics Packing (REFACTOR v2.0)
+    // 7. 240-bit Statistics Packing (v3.0 — adds Enc_Clk_Count, Dec_Clk_Count)
     // =========================================================================
-    // Packs accumulated statistics into 176-bit format per Spec v1.7 Sec 2.1.3.2.
+    // Packs accumulated statistics into 240-bit format (30 bytes/entry).
     //
     // FORMAT (Big-Endian field order, MSB first):
-    //   [175:168] BER_Index         = ber_cnt (8-bit, zero-extended from 7-bit)
-    //   [167:136] Success_Count     = acc_success (32-bit Uint32)
-    //   [135:104] Fail_Count        = acc_fail    (32-bit Uint32)
-    //   [103:72]  Actual_Flip_Count = acc_flip    (32-bit Uint32)
-    //   [71:8]    Clk_Count         = acc_clk     (64-bit Uint64)
+    //   [239:232] BER_Index         = ber_cnt       (8-bit)
+    //   [231:200] Success_Count     = acc_success   (32-bit Uint32)
+    //   [199:168] Fail_Count        = acc_fail      (32-bit Uint32)
+    //   [167:136] Actual_Flip_Count = acc_flip      (32-bit Uint32)
+    //   [135:72]  Clk_Count         = acc_clk       (64-bit Uint64, total latency)
+    //   [71:40]   Enc_Clk_Count     = acc_enc_clk   (32-bit Uint32, encoder cycles)
+    //   [39:8]    Dec_Clk_Count     = acc_dec_clk   (32-bit Uint32, decoder cycles)
     //   [7:0]     Reserved          = 8'h00
     //
-    // This wire is used in SAVE_RES state to write to mem_stats_array.
+    // PC-side: Avg_Enc_Clk = Enc_Clk_Count / Total_Trials
+    //          Avg_Dec_Clk = Dec_Clk_Count / Total_Trials
 
     wire [`STATS_DATA_WIDTH-1:0] packed_stats;
     assign packed_stats = {
-        {1'b0, ber_cnt},   // [175:168] BER_Index (8-bit, ber_cnt is 7-bit)
-        acc_success,       // [167:136] Success_Count (32-bit)
-        acc_fail,          // [135:104] Fail_Count (32-bit)
-        acc_flip,          // [103:72]  Actual_Flip_Count (32-bit)
-        acc_clk,           // [71:8]    Clk_Count (64-bit)
+        {1'b0, ber_cnt},   // [239:232] BER_Index (8-bit, ber_cnt is 7-bit)
+        acc_success,       // [231:200] Success_Count (32-bit)
+        acc_fail,          // [199:168] Fail_Count (32-bit)
+        acc_flip,          // [167:136] Actual_Flip_Count (32-bit)
+        acc_clk,           // [135:72]  Clk_Count (64-bit)
+        acc_enc_clk,       // [71:40]   Enc_Clk_Count (32-bit)
+        acc_dec_clk,       // [39:8]    Dec_Clk_Count (32-bit)
         8'h00              // [7:0]     Reserved
     };
 
@@ -400,6 +409,8 @@ module main_scan_fsm (
             acc_fail           <= 32'd0;
             acc_flip           <= 32'd0;
             acc_clk            <= 64'd0;
+            acc_enc_clk        <= 32'd0;
+            acc_dec_clk        <= 32'd0;
             trial_cnt          <= 32'd0;
 
         end else begin
@@ -466,6 +477,8 @@ module main_scan_fsm (
                             acc_fail    <= 32'd0;
                             acc_flip    <= 32'd0;
                             acc_clk     <= 64'd0;
+                            acc_enc_clk <= 32'd0;
+                            acc_dec_clk <= 32'd0;
                             state       <= `MAIN_STATE_INIT_CFG;
                         end
                     end
@@ -511,8 +524,10 @@ module main_scan_fsm (
 
                             // SINGLE-CHANNEL: only accumulate Channel A flips
                             // acc_flip <= acc_flip + {26'd0, eng_flip_a} + {26'd0, eng_flip_b};
-                            acc_flip <= acc_flip + {26'd0, eng_flip_a};
-                            acc_clk  <= acc_clk + {52'd0, eng_latency};  // eng_latency is 12-bit
+                            acc_flip    <= acc_flip + {26'd0, eng_flip_a};
+                            acc_clk     <= acc_clk + {52'd0, eng_latency};      // 12-bit total latency
+                            acc_enc_clk <= acc_enc_clk + {20'd0, eng_enc_latency}; // 12-bit enc latency
+                            acc_dec_clk <= acc_dec_clk + {20'd0, eng_dec_latency}; // 12-bit dec latency
 
                             // v2.0: Check if we've completed all N trials for this point
                             if (trial_cnt + 32'd1 >= sample_count) begin
@@ -529,15 +544,15 @@ module main_scan_fsm (
                     end
 
                     // =========================================================
-                    // SAVE_RES: Write 176-bit accumulated stats to mem_stats_array
-                    //   - Write address = ber_cnt (direct, 0~90)
+                    // SAVE_RES: Write 240-bit accumulated stats to mem_stats_array
+                    //   - Write address = ber_cnt (direct, 0~100)
                     //   - packed_stats is combinationally assembled from accumulators
                     //   - Assert mem_we_a for one cycle
                     // =========================================================
                     `MAIN_STATE_SAVE_RES: begin
                         mem_we_a      <= 1'b1;
                         mem_wr_addr_a <= ber_cnt;
-                        mem_din_a     <= packed_stats; // 176-bit from accumulators
+                        mem_din_a     <= packed_stats; // 240-bit from accumulators
 
                         state <= `MAIN_STATE_NEXT_ITER;
                     end
@@ -559,6 +574,8 @@ module main_scan_fsm (
                             acc_fail    <= 32'd0;
                             acc_flip    <= 32'd0;
                             acc_clk     <= 64'd0;
+                            acc_enc_clk <= 32'd0;
+                            acc_dec_clk <= 32'd0;
                             state       <= `MAIN_STATE_INIT_CFG;
                         end
                     end

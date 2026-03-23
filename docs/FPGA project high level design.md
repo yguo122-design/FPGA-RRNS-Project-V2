@@ -241,10 +241,10 @@ stateDiagram-v2
   - 结构: `Header(2)` + `CmdID(1)` + `Len(1)` + `Payload(7)` + `Checksum(1)`。
   - 特点: 紧凑、二进制、含校验。
   - 具体见2.1.3.1章节
-- **上行响应帧 (Response Frame)**: 固定 **2231 Bytes**。
-  - 结构: `Header(2)` + `CmdID(1)` + `Len(2)` + `GlobalInfo(3)` + `PerPointData(101×22)` + `Checksum(1)` 。
-  - 帧长计算: `2+1+2+3+(101×22)+1 = 2011 Bytes`（每点 **22 Bytes**，含 1B Reserved）。
-  - 特点: 大数据量、包含 101 个点详情、含头尾标识。
+- **上行响应帧 (Response Frame)**: 固定 **3039 Bytes**。
+  - 结构: `Header(2)` + `CmdID(1)` + `Len(2)` + `GlobalInfo(3)` + `PerPointData(101×30)` + `Checksum(1)` 。
+  - 帧长计算: `2+1+2+3+(101×30)+1 = 3039 Bytes`（每点 **30 Bytes**，含 1B Reserved）。
+  - 特点: 大数据量、包含 101 个点详情（含编码器/解码器周期数）、含头尾标识。
   - 具体见2.1.3.2章节
 
 #### 1.6.3 异常处理与超时保护 (Exception Handling & Timeout)
@@ -458,32 +458,35 @@ def run_ber_test(sample_count):
 
 ##### **2.1.3.2 上行链路 (FPGA -> PC): 二进制配置**
 
-**命令功能**：测试完成后，上报统计结果及**每个BER配置的处理总耗时**。
-**帧总长度**：2011 Bytes (当测试 101 个 BER 点时：Total Frame Length = Fixed_Header + Per_Point_Data_Total + Checksum = 8 Bytes + 101 * 22 Bytes + 1 Byte = 2011 Bytes
+**命令功能**：测试完成后，上报统计结果及**每个BER配置的处理总耗时（含编码器和解码器分项周期数）**。
+**帧总长度**：**3039 Bytes** (当测试 101 个 BER 点时：Total Frame Length = Header(2) + CmdID(1) + Length(2) + GlobalInfo(3) + 101×30 + Checksum(1) = 3039 Bytes)
 
 
 | 偏移 (Offset) | 字段 (Field)                         | 长度 (Len)    | 类型         | 描述 (Description)                                              |
 | :---------- | :--------------------------------- | :---------- | :--------- | :------------------------------------------------------------ |
 | **0**       | Header                             | 2 Bytes     | Fixed      | `0xBB 0x66`                                                   |
 | **2**       | CmdID                              | 1 Byte      | Hex        | `0x81`                                                        |
-| **3**       | Length                             | 2 Byte      | Uint8      | Payload 长度 (2005，包括global info以及测试数据，不包括checksum)，Big-Endian。 |
+| **3**       | Length                             | 2 Bytes     | Uint16     | Payload 长度 (**3033** = GlobalInfo(3) + 101×30，不含Checksum)，Big-Endian。`0x0BD9` |
 | **5**       | **Global Info**                    |             |            |                                                               |
 | 5           | `Total_Points`                     | 1 Byte      | Uint8      | 测试的 BER 点数 ( 101，从0%~10%，步长为0.1%（含BER=0基线点）)                              |
-| 6           | `Algo_Used`                        | 1 Byte      | Uint8      | 算法 ID (0~3)                                                   |
+| 6           | `Algo_Used`                        | 1 Byte      | Uint8      | 算法 ID (0~5)                                                   |
 | 7           | `Mode_Used`                        | 1 Byte      | Uint8      | 模式 ID (0/1)                                                   |
-| **8**       | **Per-Point Data** (Loop 101 times) |             |            | 每个 BER 点占 22 Bytes                                            |
+| **8**       | **Per-Point Data** (Loop 101 times) |             |            | 每个 BER 点占 **30 Bytes**                                        |
 | +0          | `BER_Index`                        | 1 Byte      | Uint8      | 当前点索引 (0~100)                                                  |
 | +1          | `Success_Count`                    | 4 Bytes     | Uint32     | 成功解码数                                                         |
 | +5          | `Fail_Count`                       | 4 Bytes     | Uint32     | 失败解码数                                                         |
-| +9          | Actual_Flip_Count                  | 4 Bytes     | Uint32     | 实际翻转了多少个比特                                                    |
-| +13         | Clk_Count_EachBER                  | **8 Bytes** | **Uint64** | **核心新增**每个BER系统时钟周期总数 (Big-Endian)                            |
-| +21         | reserved                           | 1bytes      | Uint8      | 为了适配 BRAM 映射效率，单点统计数据结构由 21 Bytes 调整为 22 Bytes                |
-| **+22**     | *(Next Point Starts)*              |             |            |                                                               |
+| +9          | `Actual_Flip_Count`                | 4 Bytes     | Uint32     | 实际翻转了多少个比特                                                    |
+| +13         | `Clk_Count_EachBER`                | **8 Bytes** | **Uint64** | 每个BER点总系统时钟周期数 (Big-Endian)                                   |
+| +21         | `Enc_Clk_Count`                    | **4 Bytes** | **Uint32** | **新增** 每个BER点编码器累计时钟周期数 (Big-Endian)                          |
+| +25         | `Dec_Clk_Count`                    | **4 Bytes** | **Uint32** | **新增** 每个BER点解码器累计时钟周期数 (Big-Endian)                          |
+| +29         | `Reserved`                         | 1 Byte      | Uint8      | 固定为 `0x00`，用于 BRAM 对齐                                         |
+| **+30**     | *(Next Point Starts)*              |             |            |                                                               |
 | **End**     | Checksum                           | 1 Byte      | Uint8      | 全帧异或校验                                                        |
-|             |                                    |             |            |                                                               |
-|             |                                    |             |            |                                                               |
-|             |                                    |             |            |                                                               |
-|             |                                    |             |            |                                                               |
+
+**PC 端计算说明：**
+- `Avg_Enc_Clk_Per_Trial = Enc_Clk_Count / (Success_Count + Fail_Count)`
+- `Avg_Dec_Clk_Per_Trial = Dec_Clk_Count / (Success_Count + Fail_Count)`
+- `Avg_Total_Clk_Per_Trial = Clk_Count_EachBER / (Success_Count + Fail_Count)`
 *   **字节序定义 (Endianness)**：
      为确保 FPGA 与 PC 端数据解析一致，本协议规定：**所有多字节字段（如 32-bit 计数器、64-bit 时间戳）均采用大端模式 (Big-Endian, MSB First) 传输。**
      *   **FPGA 侧**：组包模块 (`tx_packet_assembler`) 需先将高位字节放入 FIFO。
@@ -2092,7 +2095,7 @@ To enable immediate coding, formalized the Verilog interface definitions for all
 ## 📝 v1.8 版本修订说明
 **Date:** [2026-3-14]
 
-根据cline review意见修改完善
+根据代码审查意见修改完善
 **修改1 - 修改不一致的地方**：Algo ID映射、帧结构参数（2011 Bytes/2005 Length/22 Bytes per point）、`mem_stats_array` 176-bit接口、`test_active`信号名、
 
 **修改2 - mem_stats_array 接口更新（Section 2.3.3.5）**：将数据宽度从 168-bit 更新为 **176-bit (22 Bytes)**，新增 176-bit 数据打包格式表（BER_Index/Success/Fail/Flip/Clk/Reserved 各字段位域），Port B 改为同步读（移除 `re_b` 信号），并说明 1-cycle 读取延迟。
@@ -2106,6 +2109,27 @@ To enable immediate coding, formalized the Verilog interface definitions for all
 **修改6 - 把修订记录调整到文档结尾**
 
 **修改7 - 删除下一步行动计划章节**
+
+---
+
+
+---
+
+## 📝 版本修订记录 - v1.91 (2026-03-22)
+
+**主要变更：RS(12,4) 算法实现完成 + 编译宏控制单算法 Build 架构**
+
+#### 1. RS(12,4) 编解码器实现
+- 新建 `src/algo_wrapper/encoder_rs.v`：3级流水线，3周期延迟，系统编码
+- 新建 `src/algo_wrapper/decoder_rs.v`：FSM BM+Chien+Forney，~60周期延迟，可纠正最多4个符号错误
+- 上板验证通过：Random 模式 BER=1.5% 时成功率 98.4%，Cluster 模式 BER=7.6% 时成功率 93.4%
+
+#### 2. 编译宏控制单算法 Build 架构（Section 3.2 更新）
+- 实现了 `BUILD_ALGO_xxx` 宏机制，切换算法只需修改 `src/interfaces/main_scan_fsm.vh` 中的一行
+- 6种算法对应宏：`BUILD_ALGO_2NRM` / `BUILD_ALGO_3NRM` / `BUILD_ALGO_CRRNS_MLD` / `BUILD_ALGO_CRRNS_MRC` / `BUILD_ALGO_CRRNS_CRT` / `BUILD_ALGO_RS`
+- 详细切换指南见 `docs/algo_switch_guide.md`
+
+**状态：** v1.91 Ready for Implementation (所有6种算法均已实现并验证)
 
 ---
 
@@ -2140,4 +2164,41 @@ To enable immediate coding, formalized the Verilog interface definitions for all
 main_scan_fsm.v, error_injector_unit.vh, main_scan_fsm.vh, gen_rom.py, py_controller_main.py,
 decoder_crrns_mld.v（新建，从 decoder_crrns.v 重命名）
 
-**状态：** v1.9 Ready for Implementation (C-RRNS-MLD 已验证，MRC/CRT 待实现)
+---
+
+## 📝 版本修订记录 - v2.0 (2026-03-23)
+
+**主要变更：新增编码器/解码器周期数测量，数据格式从 176-bit 扩展到 240-bit**
+
+#### 核心变更
+
+| 参数 | 旧值 (v1.9) | 新值 (v2.0) |
+|------|------------|------------|
+| 每点数据宽度 | 176-bit (22 Bytes) | **240-bit (30 Bytes)** |
+| 新增字段 | — | Enc_Clk_Count (32-bit) + Dec_Clk_Count (32-bit) |
+| 帧总长度 | 2231 Bytes | **3039 Bytes** |
+| Length 字段 | 0x08B1 (2225) | **0x0BD9 (3033)** |
+| BRAM 类型 | RAMB18 (~15.6 Kbits) | **RAMB36 (~23.7 Kbits)** |
+
+#### 新增字段说明
+- `Enc_Clk_Count [71:40]`：该 BER 点所有试验的编码器周期数累计（32-bit Uint32）
+- `Dec_Clk_Count [39:8]`：该 BER 点所有试验的解码器周期数累计（32-bit Uint32）
+- PC 端计算：`Avg_Enc_Clk = Enc_Clk_Count / Total_Trials`，`Avg_Dec_Clk = Dec_Clk_Count / Total_Trials`
+
+#### 位宽选择依据
+- 最大测试次数 1,000,000 × 最大解码延迟 1,000 cycles = 10亿 < 32-bit 最大值 42亿
+- **4 bytes (32 bits) 完全足够**
+
+#### 修改文件
+| 文件 | 变更 |
+|------|------|
+| `src/interfaces/mem_stats_array.vh` | 数据宽度 176→240 bits，新增 Enc/Dec Clk 字段，BRAM 说明更新 |
+| `src/ctrl/auto_scan_engine.v` | 新增 enc_latency/dec_latency 输出端口，ENC_WAIT/DEC_WAIT 状态计数 |
+| `src/ctrl/main_scan_fsm.v` | 新增 acc_enc_clk/acc_dec_clk 累加器，packed_stats 240-bit |
+| `src/interfaces/tx_packet_assembler.vh` | 30 bytes/entry，帧长 3039，Length=0x0BD9 |
+| `src/verify/tx_packet_assembler.v` | 30 字节序列化，end-of-entry 检查 byte_cnt==29 |
+| `src/PCpython/py_controller_main.py` | 解析 30 字节格式，CSV 新增 Enc/Dec Clk 列 |
+
+---
+
+

@@ -1,49 +1,52 @@
 // =============================================================================
 // File: tx_packet_assembler.v
-// Description: TX Packet Assembler - Frames 91-point BER stats into UART frame
+// Description: TX Packet Assembler - Frames 101-point BER stats into UART frame
 //              Part of FPGA Multi-Algorithm Fault-Tolerant Test System
 //              Implements Design Doc v1.7 Section 2.1.3.2 & 2.3.3.5 (Part B)
-// Version: v2.0 (Full Architectural Refactor - Spec v1.7 Compliant)
+// Version: v3.0 (Added Enc_Clk_Count and Dec_Clk_Count fields)
 //
 // ─────────────────────────────────────────────────────────────────────────────
-// FRAME FORMAT (2011 Bytes Total, Big-Endian):
+// FRAME FORMAT (3039 Bytes Total, Big-Endian):
 //   Byte  0:    Sync High  (0xBB)
 //   Byte  1:    Sync Low   (0x66)
 //   Byte  2:    CmdID      (0x81)
-//   Byte  3:    Length Hi  (0x07)  ← 2005 = 0x07D5
-//   Byte  4:    Length Lo  (0xD5)
-//   Byte  5:    Total_Points (91 = 0x5B)
-//   Byte  6:    Algo_Used  (0~3)
+//   Byte  3:    Length Hi  (0x0B)  ← 3033 = 0x0BD9
+//   Byte  4:    Length Lo  (0xD9)
+//   Byte  5:    Total_Points (101 = 0x65)
+//   Byte  6:    Algo_Used  (0~5)
 //   Byte  7:    Mode_Used  (0/1)
-//   Bytes 8..2009: Per-Point Data (91 × 22 Bytes)
-//     Each 22-byte entry (Big-Endian multi-byte fields):
+//   Bytes 8..3037: Per-Point Data (101 × 30 Bytes)
+//     Each 30-byte entry (Big-Endian multi-byte fields):
 //       +0:     BER_Index         (1 Byte, Uint8)
 //       +1..+4: Success_Count     (4 Bytes, Uint32, MSB first)
 //       +5..+8: Fail_Count        (4 Bytes, Uint32, MSB first)
 //       +9..+12:Actual_Flip_Count (4 Bytes, Uint32, MSB first)
 //       +13..+20:Clk_Count        (8 Bytes, Uint64, MSB first)
-//       +21:    Reserved          (1 Byte, 0x00)
-//   Byte 2010:  Checksum (1 Byte, XOR of all preceding bytes)
+//       +21..+24:Enc_Clk_Count    (4 Bytes, Uint32, MSB first)
+//       +25..+28:Dec_Clk_Count    (4 Bytes, Uint32, MSB first)
+//       +29:    Reserved          (1 Byte, 0x00)
+//   Byte 3038:  Checksum (1 Byte, XOR of all preceding bytes)
 //
 // CHECKSUM:
-//   8-bit XOR reduction over ALL bytes from Byte 0 to Byte 2009 (inclusive).
-//   Per Spec v1.7 Section 2.1.3.1: Checksum = Byte[0] ^ Byte[1] ^ ... ^ Byte[N-1]
+//   8-bit XOR reduction over ALL bytes from Byte 0 to Byte 3037 (inclusive).
 //
 // MEMORY INTERFACE:
-//   mem_rd_addr: 7-bit address (0~90), driven by this module.
-//   mem_rd_data: 176-bit data from mem_stats_array (1-cycle BRAM latency).
+//   mem_rd_addr: 7-bit address (0~100), driven by this module.
+//   mem_rd_data: 240-bit data from mem_stats_array (1-cycle BRAM latency).
 //   RD_WAIT state issues address, SEND_BYTES state reads latched data.
 //
 // FLOW CONTROL:
 //   tx_valid=1 + tx_ready=1 → byte consumed, FSM advances.
 //   tx_valid=1 + tx_ready=0 → byte held, FSM stalls (backpressure).
 //
-// 176-BIT DATA LAYOUT (from mem_stats_array, Big-Endian field order):
-//   [175:168] BER_Index         (8-bit)
-//   [167:136] Success_Count     (32-bit)
-//   [135:104] Fail_Count        (32-bit)
-//   [103:72]  Actual_Flip_Count (32-bit)
-//   [71:8]    Clk_Count         (64-bit)
+// 240-BIT DATA LAYOUT (from mem_stats_array, Big-Endian field order):
+//   [239:232] BER_Index         (8-bit)
+//   [231:200] Success_Count     (32-bit)
+//   [199:168] Fail_Count        (32-bit)
+//   [167:136] Actual_Flip_Count (32-bit)
+//   [135:72]  Clk_Count         (64-bit)
+//   [71:40]   Enc_Clk_Count     (32-bit)
+//   [39:8]    Dec_Clk_Count     (32-bit)
 //   [7:0]     Reserved          (8-bit, 0x00)
 // =============================================================================
 
@@ -159,34 +162,49 @@ module tx_packet_assembler (
     //
     // Implemented as: entry_latch >> (8*(21-byte_cnt)) then take [7:0]
 
-    // Big-Endian byte extraction: byte_cnt=0 → MSB (BER_Index), byte_cnt=21 → LSB (Reserved)
-    // Use a registered mux to avoid variable part-select synthesis issues.
-    // The 22-byte case statement maps directly to BRAM output bits.
+    // Big-Endian byte extraction: byte_cnt=0 → MSB (BER_Index), byte_cnt=29 → LSB (Reserved)
+    // 240-bit entry layout (30 bytes):
+    //   Byte  0: [239:232] BER_Index
+    //   Byte  1-4: [231:200] Success_Count (MSB first)
+    //   Byte  5-8: [199:168] Fail_Count (MSB first)
+    //   Byte  9-12: [167:136] Actual_Flip_Count (MSB first)
+    //   Byte 13-20: [135:72] Clk_Count (MSB first)
+    //   Byte 21-24: [71:40] Enc_Clk_Count (MSB first)
+    //   Byte 25-28: [39:8] Dec_Clk_Count (MSB first)
+    //   Byte 29: [7:0] Reserved (0x00)
     reg [7:0] current_entry_byte;
     always @(*) begin
         case (byte_cnt)
-            5'd0:  current_entry_byte = entry_latch[175:168]; // BER_Index
-            5'd1:  current_entry_byte = entry_latch[167:160]; // Success[31:24]
-            5'd2:  current_entry_byte = entry_latch[159:152]; // Success[23:16]
-            5'd3:  current_entry_byte = entry_latch[151:144]; // Success[15:8]
-            5'd4:  current_entry_byte = entry_latch[143:136]; // Success[7:0]
-            5'd5:  current_entry_byte = entry_latch[135:128]; // Fail[31:24]
-            5'd6:  current_entry_byte = entry_latch[127:120]; // Fail[23:16]
-            5'd7:  current_entry_byte = entry_latch[119:112]; // Fail[15:8]
-            5'd8:  current_entry_byte = entry_latch[111:104]; // Fail[7:0]
-            5'd9:  current_entry_byte = entry_latch[103:96];  // Flip[31:24]
-            5'd10: current_entry_byte = entry_latch[95:88];   // Flip[23:16]
-            5'd11: current_entry_byte = entry_latch[87:80];   // Flip[15:8]
-            5'd12: current_entry_byte = entry_latch[79:72];   // Flip[7:0]
-            5'd13: current_entry_byte = entry_latch[71:64];   // Clk[63:56]
-            5'd14: current_entry_byte = entry_latch[63:56];   // Clk[55:48]
-            5'd15: current_entry_byte = entry_latch[55:48];   // Clk[47:40]
-            5'd16: current_entry_byte = entry_latch[47:40];   // Clk[39:32]
-            5'd17: current_entry_byte = entry_latch[39:32];   // Clk[31:24]
-            5'd18: current_entry_byte = entry_latch[31:24];   // Clk[23:16]
-            5'd19: current_entry_byte = entry_latch[23:16];   // Clk[15:8]
-            5'd20: current_entry_byte = entry_latch[15:8];    // Clk[7:0]
-            5'd21: current_entry_byte = entry_latch[7:0];     // Reserved (0x00)
+            5'd0:  current_entry_byte = entry_latch[239:232]; // BER_Index
+            5'd1:  current_entry_byte = entry_latch[231:224]; // Success[31:24]
+            5'd2:  current_entry_byte = entry_latch[223:216]; // Success[23:16]
+            5'd3:  current_entry_byte = entry_latch[215:208]; // Success[15:8]
+            5'd4:  current_entry_byte = entry_latch[207:200]; // Success[7:0]
+            5'd5:  current_entry_byte = entry_latch[199:192]; // Fail[31:24]
+            5'd6:  current_entry_byte = entry_latch[191:184]; // Fail[23:16]
+            5'd7:  current_entry_byte = entry_latch[183:176]; // Fail[15:8]
+            5'd8:  current_entry_byte = entry_latch[175:168]; // Fail[7:0]
+            5'd9:  current_entry_byte = entry_latch[167:160]; // Flip[31:24]
+            5'd10: current_entry_byte = entry_latch[159:152]; // Flip[23:16]
+            5'd11: current_entry_byte = entry_latch[151:144]; // Flip[15:8]
+            5'd12: current_entry_byte = entry_latch[143:136]; // Flip[7:0]
+            5'd13: current_entry_byte = entry_latch[135:128]; // Clk[63:56]
+            5'd14: current_entry_byte = entry_latch[127:120]; // Clk[55:48]
+            5'd15: current_entry_byte = entry_latch[119:112]; // Clk[47:40]
+            5'd16: current_entry_byte = entry_latch[111:104]; // Clk[39:32]
+            5'd17: current_entry_byte = entry_latch[103:96];  // Clk[31:24]
+            5'd18: current_entry_byte = entry_latch[95:88];   // Clk[23:16]
+            5'd19: current_entry_byte = entry_latch[87:80];   // Clk[15:8]
+            5'd20: current_entry_byte = entry_latch[79:72];   // Clk[7:0]
+            5'd21: current_entry_byte = entry_latch[71:64];   // EncClk[31:24]
+            5'd22: current_entry_byte = entry_latch[63:56];   // EncClk[23:16]
+            5'd23: current_entry_byte = entry_latch[55:48];   // EncClk[15:8]
+            5'd24: current_entry_byte = entry_latch[47:40];   // EncClk[7:0]
+            5'd25: current_entry_byte = entry_latch[39:32];   // DecClk[31:24]
+            5'd26: current_entry_byte = entry_latch[31:24];   // DecClk[23:16]
+            5'd27: current_entry_byte = entry_latch[23:16];   // DecClk[15:8]
+            5'd28: current_entry_byte = entry_latch[15:8];    // DecClk[7:0]
+            5'd29: current_entry_byte = entry_latch[7:0];     // Reserved (0x00)
             default: current_entry_byte = 8'h00;
         endcase
     end
@@ -360,11 +378,15 @@ module tx_packet_assembler (
                 end
 
                 // =============================================================
-                // SEND_BYTES: Serialize 22 bytes of current entry (Big-Endian)
-                //   byte_cnt=0  → entry[175:168] = BER_Index
-                //   byte_cnt=1  → entry[167:160] = Success_Count[31:24]
-                //   ...
-                //   byte_cnt=21 → entry[7:0]     = Reserved (0x00)
+                // SEND_BYTES: Serialize 30 bytes of current entry (Big-Endian)
+                //   byte_cnt=0  → entry[239:232] = BER_Index
+                //   byte_cnt=1..4  → Success_Count
+                //   byte_cnt=5..8  → Fail_Count
+                //   byte_cnt=9..12 → Actual_Flip_Count
+                //   byte_cnt=13..20 → Clk_Count
+                //   byte_cnt=21..24 → Enc_Clk_Count
+                //   byte_cnt=25..28 → Dec_Clk_Count
+                //   byte_cnt=29 → entry[7:0] = Reserved (0x00)
                 // =============================================================
                 `ASM_STATE_SEND_BYTES: begin
                     tx_valid <= 1'b1;
@@ -373,8 +395,8 @@ module tx_packet_assembler (
                     if (tx_valid && tx_ready) begin
                         xor_chk <= xor_chk ^ tx_data;
 
-                        if (byte_cnt == 5'd21) begin
-                            // All 22 bytes of this entry sent
+                        if (byte_cnt == 5'd29) begin
+                            // All 30 bytes of this entry sent
                             if (point_cnt == 7'd100) begin  // 7'd(`PKT_TOTAL_POINTS - 1) = 7'd100
                                 // All 101 points sent → send checksum
                                 tx_valid <= 1'b0;

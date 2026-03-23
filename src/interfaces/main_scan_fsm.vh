@@ -33,8 +33,8 @@
 // `define BUILD_ALGO_3NRM        // algo_id=1: 3NRM-RRNS,   48b, t=3,  ~842 cycles
 // `define BUILD_ALGO_CRRNS_MLD   // algo_id=2: C-RRNS-MLD,  61b, t=3,  ~924 cycles
 // `define BUILD_ALGO_CRRNS_MRC   // algo_id=3: C-RRNS-MRC,  61b, none, ~8 cycles
-// `define BUILD_ALGO_CRRNS_CRT   // algo_id=4: C-RRNS-CRT,  61b, none, ~5 cycles
-`define BUILD_ALGO_RS              // algo_id=5: RS(12,4),    48b, t=4,  ~60 cycles
+ `define BUILD_ALGO_CRRNS_CRT   // algo_id=4: C-RRNS-CRT,  61b, none, ~5 cycles
+//  `define BUILD_ALGO_RS              // algo_id=5: RS(12,4),    48b, t=4,  ~60 cycles
 // -----------------------------------------------------------------
 
 // Derive CURRENT_ALGO_ID from the build macro (do not edit below)

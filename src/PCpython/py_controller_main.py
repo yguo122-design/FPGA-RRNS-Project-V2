@@ -72,36 +72,44 @@ HEADER_REQ = bytes([0xAA, 0x55])
 HEADER_RESP = bytes([0xBB, 0x66])
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Uplink Frame Per-Point Data Layout (22 Bytes / 176 bits per entry)
-# Matches mem_stats_array.vh v2.0 + tx_packet_assembler.v v2.0
+# Uplink Frame Per-Point Data Layout (30 Bytes / 240 bits per entry)
+# Matches mem_stats_array.vh v3.0 + tx_packet_assembler.v v3.0
 #
-# FPGA sends each entry as 22 bytes (Big-Endian, MSB first):
-#   Byte  0:     BER_Index          (1 Byte,  Uint8,  value = 0~90)
+# FPGA sends each entry as 30 bytes (Big-Endian, MSB first):
+#   Byte  0:     BER_Index          (1 Byte,  Uint8,  value = 0~100)
 #   Bytes 1..4:  Success_Count      (4 Bytes, Uint32, Big-Endian)
 #   Bytes 5..8:  Fail_Count         (4 Bytes, Uint32, Big-Endian)
 #   Bytes 9..12: Actual_Flip_Count  (4 Bytes, Uint32, Big-Endian)
 #   Bytes 13..20:Clk_Count          (8 Bytes, Uint64, Big-Endian)
-#   Byte  21:    Reserved           (1 Byte,  0x00)
+#   Bytes 21..24:Enc_Clk_Count      (4 Bytes, Uint32, Big-Endian)
+#   Bytes 25..28:Dec_Clk_Count      (4 Bytes, Uint32, Big-Endian)
+#   Byte  29:    Reserved           (1 Byte,  0x00)
 #
-# Corresponds to 176-bit BRAM entry layout:
-#   [175:168] BER_Index
-#   [167:136] Success_Count
-#   [135:104] Fail_Count
-#   [103:72]  Actual_Flip_Count
-#   [71:8]    Clk_Count
+# Corresponds to 240-bit BRAM entry layout:
+#   [239:232] BER_Index
+#   [231:200] Success_Count
+#   [199:168] Fail_Count
+#   [167:136] Actual_Flip_Count
+#   [135:72]  Clk_Count
+#   [71:40]   Enc_Clk_Count
+#   [39:8]    Dec_Clk_Count
 #   [7:0]     Reserved
+#
+# PC-side calculation:
+#   Avg_Enc_Clk_Per_Trial = Enc_Clk_Count / Total_Trials
+#   Avg_Dec_Clk_Per_Trial = Dec_Clk_Count / Total_Trials
 # ─────────────────────────────────────────────────────────────────────────────
-POINT_DATA_SIZE = 22   # 22 Bytes per BER point (176-bit entry)
+POINT_DATA_SIZE = 30   # 30 Bytes per BER point (240-bit entry)
 
 # Frame Length Definitions
 # Downlink: Header(2) + CmdID(1) + Len(1) + Payload(7) + Checksum(1) = 12 Bytes
 FRAME_LEN_REQ = 12
 
-# Uplink: Header(2) + CmdID(1) + Length(2) + GlobalInfo(3) + Data(101*22) + Checksum(1) = 2231 Bytes
-# Length field value = GlobalInfo(3) + PerPointData(101*22=2222) = 2225 = 0x08B1
-FRAME_LEN_RESP = 2231
+# Uplink: Header(2) + CmdID(1) + Length(2) + GlobalInfo(3) + Data(101*30) + Checksum(1) = 3039 Bytes
+# Length field value = GlobalInfo(3) + PerPointData(101*30=3030) = 3033 = 0x0BD9
+FRAME_LEN_RESP = 3039
 PAYLOAD_DATA_POINTS = 101
-EXPECTED_LENGTH_FIELD = 0x08B1  # 2225: GlobalInfo(3) + 101*22(2222)
+EXPECTED_LENGTH_FIELD = 0x0BD9  # 3033: GlobalInfo(3) + 101*30(3030)
 
 class FpgaController:
     def __init__(self, port: str, baudrate: int):
@@ -327,15 +335,17 @@ class FpgaController:
             }
             offset += 3
 
-            # 6. Parse 91 Data Points (22 Bytes each, v2.0 format)
+            # 6. Parse 101 Data Points (30 Bytes each, v3.0 format)
             # ─────────────────────────────────────────────────────────────────
-            # Each 22-byte entry layout (Big-Endian):
+            # Each 30-byte entry layout (Big-Endian):
             #   Byte  0:     BER_Index         (Uint8)
             #   Bytes 1..4:  Success_Count     (Uint32, Big-Endian)
             #   Bytes 5..8:  Fail_Count        (Uint32, Big-Endian)
             #   Bytes 9..12: Actual_Flip_Count (Uint32, Big-Endian)
             #   Bytes 13..20:Clk_Count         (Uint64, Big-Endian)
-            #   Byte  21:    Reserved          (0x00, ignored)
+            #   Bytes 21..24:Enc_Clk_Count     (Uint32, Big-Endian)
+            #   Bytes 25..28:Dec_Clk_Count     (Uint32, Big-Endian)
+            #   Byte  29:    Reserved          (0x00, ignored)
             # ─────────────────────────────────────────────────────────────────
             results = []
             for i in range(PAYLOAD_DATA_POINTS):
@@ -344,18 +354,22 @@ class FpgaController:
                     print(f"[WARNING] Truncated data at point {i+1}, stopping parse.")
                     break
 
-                # Parse 22-byte entry fields (Big-Endian)
+                # Parse 30-byte entry fields (Big-Endian)
                 ber_idx     = entry_bytes[0]                                   # Byte 0
                 success_cnt = struct.unpack('>I', entry_bytes[1:5])[0]         # Bytes 1..4
                 fail_cnt    = struct.unpack('>I', entry_bytes[5:9])[0]         # Bytes 5..8
                 flip_cnt    = struct.unpack('>I', entry_bytes[9:13])[0]        # Bytes 9..12
                 clk_cnt     = struct.unpack('>Q', entry_bytes[13:21])[0]       # Bytes 13..20
-                # entry_bytes[21] = Reserved (0x00), ignored
+                enc_clk_cnt = struct.unpack('>I', entry_bytes[21:25])[0]       # Bytes 21..24
+                dec_clk_cnt = struct.unpack('>I', entry_bytes[25:29])[0]       # Bytes 25..28
+                # entry_bytes[29] = Reserved (0x00), ignored
 
                 # Compute derived statistics
                 total_trials  = success_cnt + fail_cnt
                 success_rate  = success_cnt / total_trials if total_trials > 0 else 0.0
                 avg_clk       = clk_cnt     / total_trials if total_trials > 0 else 0.0
+                avg_enc_clk   = enc_clk_cnt / total_trials if total_trials > 0 else 0.0
+                avg_dec_clk   = dec_clk_cnt / total_trials if total_trials > 0 else 0.0
 
                 # BER_Value: target BER for this test point (index → value)
                 ber_value = BER_START + ber_idx * BER_STEP
@@ -367,9 +381,13 @@ class FpgaController:
                     'Fail_Count':    fail_cnt,
                     'Flip_Count':    flip_cnt,
                     'Clk_Count':     clk_cnt,
+                    'Enc_Clk_Count': enc_clk_cnt,
+                    'Dec_Clk_Count': dec_clk_cnt,
                     'Total_Trials':  total_trials,
                     'Success_Rate':  success_rate,
                     'Avg_Clk':       avg_clk,
+                    'Avg_Enc_Clk':   avg_enc_clk,
+                    'Avg_Dec_Clk':   avg_dec_clk,
                 }
                 results.append(point_res)
                 offset += POINT_DATA_SIZE
@@ -509,7 +527,7 @@ def save_to_csv(data: Dict, filename: str):
         with open(final_filename, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             # Write header info
-            writer.writerow(["Test Report (v2.0 Statistical Aggregation, 22-byte/point)"])
+            writer.writerow(["Test Report (v3.0 Statistical Aggregation, 30-byte/point)"])
             writer.writerow(["Timestamp",    data['timestamp']])
             writer.writerow(["Algorithm",    ALGO_MAP.get(algo_id, "Unknown")])
             writer.writerow(["Error Mode",   ERROR_MODE_MAP.get(global_info['mode_used'], "Unknown")])
@@ -517,12 +535,14 @@ def save_to_csv(data: Dict, filename: str):
             writer.writerow(["Total Points", global_info['total_points']])
             writer.writerow([])  # Empty row
 
-            # Write column headers (v2.1 format: no Point_ID, added BER_Value & BER_Value_Act)
+            # Write column headers (v3.0 format: added Enc_Clk and Dec_Clk)
             writer.writerow([
                 "BER_Index", "BER_Value",
                 "Success_Count", "Fail_Count", "Total_Trials",
                 "Success_Rate", "Flip_Count", "BER_Value_Act",
-                "Clk_Count", "Avg_Clk_Per_Trial"
+                "Clk_Count", "Avg_Clk_Per_Trial",
+                "Enc_Clk_Count", "Avg_Enc_Clk_Per_Trial",
+                "Dec_Clk_Count", "Avg_Dec_Clk_Per_Trial"
             ])
 
             # Write data rows
@@ -536,11 +556,15 @@ def save_to_csv(data: Dict, filename: str):
                     p['Success_Count'],
                     p['Fail_Count'],
                     p['Total_Trials'],
-                    f"{p['Success_Rate']:.3f}",     # Success/Total, 3 decimal places
+                    f"{p['Success_Rate']:.3f}",
                     p['Flip_Count'],
                     f"{ber_act:.6f}",
                     p['Clk_Count'],
-                    f"{int(round(p['Avg_Clk']))}"   # Integer, no decimal
+                    f"{int(round(p['Avg_Clk']))}",
+                    p.get('Enc_Clk_Count', 0),
+                    f"{int(round(p.get('Avg_Enc_Clk', 0)))}",
+                    p.get('Dec_Clk_Count', 0),
+                    f"{int(round(p.get('Avg_Dec_Clk', 0)))}"
                 ])
 
         print(f"\n[OK] Data saved to: {final_filename}")

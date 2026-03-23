@@ -70,7 +70,9 @@ module auto_scan_engine (
     output wire        busy,
     output reg         done,
     output reg         result_pass,
-    output reg  [11:0] latency_cycles,  // 12-bit: covers 3NRM 842 cycles (max 4095)
+    output reg  [11:0] latency_cycles,  // 12-bit: total trial latency (enc+inj+dec+comp)
+    output reg  [11:0] enc_latency,     // 12-bit: encoder latency (enc_start to enc_done)
+    output reg  [11:0] dec_latency,     // 12-bit: decoder latency (dec_start to dec_valid_a)
     output reg         was_injected,
     output reg  [5:0]  flip_count_a,
     output reg  [5:0]  flip_count_b,   // Always 6'd0 in single-channel mode
@@ -184,6 +186,10 @@ module auto_scan_engine (
 
     // BUG FIX #33: 2-bit counter for INJ_WAIT state
     reg [1:0]  inj_wait_cnt;
+
+    // Encoder and decoder latency measurement counters
+    reg [11:0] enc_lat_cnt;   // Counts cycles in ENC_WAIT (enc_start to enc_done_d1)
+    reg [11:0] dec_lat_cnt;   // Counts cycles in DEC_WAIT (dec_start to dec_valid_a)
 
     // =========================================================================
     // 5. Error Injector Unit - Channel A only
@@ -301,6 +307,8 @@ module auto_scan_engine (
             done             <= 1'b0;
             result_pass      <= 1'b0;
             latency_cycles   <= 12'd0;
+            enc_latency      <= 12'd0;
+            dec_latency      <= 12'd0;
             was_injected     <= 1'b0;
             flip_count_a     <= 6'd0;
             flip_count_b     <= 6'd0;   // Always 0 in single-channel mode
@@ -320,6 +328,8 @@ module auto_scan_engine (
             inj_wait_cnt     <= 2'd0;
             inj_out_a_latch  <= 64'd0;
             // inj_out_b_latch  <= 64'd0;  // SINGLE-CHANNEL: disabled
+            enc_lat_cnt      <= 12'd0;
+            dec_lat_cnt      <= 12'd0;
 
         end else begin
             // Default: deassert single-cycle control signals
@@ -363,6 +373,7 @@ module auto_scan_engine (
                         sym_a_latch     <= prbs_out[15:0];  // Symbol A = lower 16 bits
                         sym_b_latch     <= 16'd0;           // Symbol B = unused (single-channel)
                         comp_start_sent <= 1'b0;
+                        enc_lat_cnt     <= 12'd0;           // Reset encoder latency counter
                         enc_start       <= 1'b1;
                         state           <= `ENG_STATE_ENC_WAIT;
                     end
@@ -373,6 +384,7 @@ module auto_scan_engine (
                 //   BUG FIX: encoder_wrapper latches codeword_A on enc_done=1 via NBA,
                 //   so codeword_A is only valid one cycle AFTER enc_done=1.
                 //   enc_done_d1 aligns the latch point with the valid codeword data.
+                //   enc_lat_cnt: counts cycles from enc_start to enc_done_d1 (inclusive)
                 // =============================================================
                 `ENG_STATE_ENC_WAIT: begin
                     if (dec_timeout_flag) begin
@@ -386,12 +398,14 @@ module auto_scan_engine (
                         end
 
                         enc_done_d1 <= enc_done;
+                        enc_lat_cnt <= enc_lat_cnt + 12'd1;  // Count encoder cycles
 
                         if (enc_done_d1) begin
                             enc_out_a_latch <= codeword_a_raw[63:0];
                             // enc_out_b_latch <= codeword_b_raw[63:0];  // SINGLE-CHANNEL: disabled
                             cw_len_latch    <= cw_len_a;
                             enc_done_d1     <= 1'b0;
+                            enc_latency     <= enc_lat_cnt;  // Latch encoder latency
                             state           <= `ENG_STATE_INJ_WAIT;
                         end
                     end
@@ -421,20 +435,23 @@ module auto_scan_engine (
                         flip_count_a <= inj_flip_a;
                         // flip_count_b <= inj_flip_b;  // SINGLE-CHANNEL: Channel B disabled
 
-                        dec_start <= 1'b1;
-                        state     <= `ENG_STATE_DEC_WAIT;
+                        dec_lat_cnt <= 12'd0;  // Reset decoder latency counter
+                        dec_start   <= 1'b1;
+                        state       <= `ENG_STATE_DEC_WAIT;
                     end
                 end
 
                 // =============================================================
                 // DEC_WAIT: Wait for Channel A decoder to produce valid output
                 //   Single-channel mode: only wait for dec_valid_a
-                //   (was: dec_valid_a && dec_valid_b)
+                //   dec_lat_cnt: counts cycles from dec_start to dec_valid_a (inclusive)
                 // =============================================================
                 `ENG_STATE_DEC_WAIT: begin
+                    dec_lat_cnt <= dec_lat_cnt + 12'd1;  // Count decoder cycles
                     if (dec_valid_a) begin
                         // Channel A decoder has produced output → move to COMP_WAIT
-                        state <= `ENG_STATE_COMP_WAIT;
+                        dec_latency <= dec_lat_cnt;  // Latch decoder latency
+                        state       <= `ENG_STATE_COMP_WAIT;
                     end else if (dec_timeout_flag) begin
                         result_pass <= 1'b0;
                         state       <= `ENG_STATE_DONE;

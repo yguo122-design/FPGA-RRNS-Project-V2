@@ -38,18 +38,18 @@
 // Then Global Info = 3 bytes → total fixed header = 8 bytes before per-point data
 
 `define PKT_GLOBAL_INFO_BYTES 3    // Total_Points(1) + Algo_ID(1) + Mode_ID(1)
-`define PKT_BYTES_PER_POINT   22   // 22 bytes per BER point (176-bit)
+`define PKT_BYTES_PER_POINT   30   // 30 bytes per BER point (240-bit)
 `define PKT_TOTAL_POINTS      101  // 101 BER test points (index 0~100, BER 0.000~0.100)
 `define PKT_CHECKSUM_BYTES    1    // 1-byte XOR checksum at frame end
 
-// Length field value = GlobalInfo(3) + PerPointData(101*22=2222) = 2225 = 0x08B1
+// Length field value = GlobalInfo(3) + PerPointData(101*30=3030) = 3033 = 0x0BD9
 // (Excludes checksum per spec)
-`define PKT_LENGTH_HI         8'h08   // 2225 = 0x08B1
-`define PKT_LENGTH_LO         8'hB1
+`define PKT_LENGTH_HI         8'h0B   // 3033 = 0x0BD9
+`define PKT_LENGTH_LO         8'hD9
 
-// Total frame size = Sync(2) + CmdID(1) + Length(2) + GlobalInfo(3) + 101*22 + Checksum(1)
-//                 = 2 + 1 + 2 + 3 + 2222 + 1 = 2231 bytes
-`define PKT_TOTAL_FRAME_BYTES 2231
+// Total frame size = Sync(2) + CmdID(1) + Length(2) + GlobalInfo(3) + 101*30 + Checksum(1)
+//                 = 2 + 1 + 2 + 3 + 3030 + 1 = 3039 bytes
+`define PKT_TOTAL_FRAME_BYTES 3039
 
 // Byte width
 `define PKT_BYTE_WIDTH        8
