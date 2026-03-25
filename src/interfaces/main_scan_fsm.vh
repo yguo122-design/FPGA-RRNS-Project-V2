@@ -7,7 +7,7 @@
 // Strategy:
 //   - Single Algorithm per Build: Use `ifdef to select Encoder/Decoder logic.
 //   - BER Sweep Only: FSM iterates ONLY through BER points (0.01 ~ 0.10).
-//   - Unified Upload: Wait for ALL 91 points to complete, then upload once.
+//   - Unified Upload: Wait for ALL 101 points to complete, then upload once.
 // =============================================================================
 
 `ifndef MAIN_SCAN_FSM_VH
