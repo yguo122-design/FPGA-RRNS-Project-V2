@@ -12,6 +12,7 @@ from typing import Optional, List, Dict, Tuple
 # Script directory (used for result output path)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULT_DIR = os.path.join(SCRIPT_DIR, 'result')
+SUM_RESULT_DIR = os.path.join(RESULT_DIR, 'sum_result')  # All-in-One mode output
 
 # ================= Configuration Constants =================
 DEFAULT_PORT = 'COM8'       # Default serial port (Linux: /dev/ttyUSB0)
@@ -764,12 +765,262 @@ def _auto_plot(csv_path: str):
         print(f"[WARNING] Auto-plot failed: {e}")
 
 
+def save_to_sum_result_csv(data: Dict, burst_len: int, algo_id_override: int = None) -> Optional[str]:
+    """
+    Save results to sum_result directory (for All-in-One mode).
+    Uses the same format as save_to_csv but saves to SUM_RESULT_DIR.
+
+    algo_id_override: In ALL_IN_ONE_BUILD mode, the FPGA's GlobalInfo.algo_used
+    field reflects the compile-time CURRENT_ALGO_ID (not the runtime algo_id sent
+    by the PC). Pass the PC-side algo_id here to correctly label the CSV file.
+    If None, falls back to global_info['algo_used'] (single-build mode behaviour).
+
+    Returns the saved file path, or None on failure.
+    """
+    if not data:
+        return None
+
+    global_info = data['global']
+    points = data['points']
+    # Use PC-side algo_id if provided (ALL_IN_ONE_BUILD mode), otherwise use FPGA's report
+    algo_id = algo_id_override if algo_id_override is not None else global_info['algo_used']
+    w_valid = ALGO_W_VALID.get(algo_id, 41)
+
+    os.makedirs(SUM_RESULT_DIR, exist_ok=True)
+    timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+    final_filename = os.path.join(SUM_RESULT_DIR, f"test_results_{timestamp_str}.csv")
+
+    try:
+        with open(final_filename, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Test Report (v3.0 Statistical Aggregation, 30-byte/point)"])
+            writer.writerow(["Timestamp",    data['timestamp']])
+            writer.writerow(["Algorithm",    ALGO_MAP.get(algo_id, "Unknown")])
+            writer.writerow(["Error Mode",   ERROR_MODE_MAP.get(global_info['mode_used'], "Unknown")])
+            writer.writerow(["Burst_Length", burst_len])
+            writer.writerow(["Total Points", global_info['total_points']])
+            writer.writerow([])
+
+            writer.writerow([
+                "BER_Index", "BER_Value",
+                "Success_Count", "Fail_Count", "Total_Trials",
+                "Success_Rate", "Flip_Count", "BER_Value_Act",
+                "Clk_Count", "Avg_Clk_Per_Trial",
+                "Enc_Clk_Count", "Avg_Enc_Clk_Per_Trial",
+                "Dec_Clk_Count", "Avg_Dec_Clk_Per_Trial"
+            ])
+
+            for p in points:
+                ber_act = p['Flip_Count'] / (p['Total_Trials'] * w_valid) if p['Total_Trials'] > 0 else 0.0
+                writer.writerow([
+                    p['BER_Index'],
+                    f"{p['BER_Value']:.3f}",
+                    p['Success_Count'],
+                    p['Fail_Count'],
+                    p['Total_Trials'],
+                    f"{p['Success_Rate']:.3f}",
+                    p['Flip_Count'],
+                    f"{ber_act:.6f}",
+                    p['Clk_Count'],
+                    f"{int(round(p['Avg_Clk']))}",
+                    p.get('Enc_Clk_Count', 0),
+                    f"{int(round(p.get('Avg_Enc_Clk', 0)))}",
+                    p.get('Dec_Clk_Count', 0),
+                    f"{int(round(p.get('Avg_Dec_Clk', 0)))}"
+                ])
+
+        print(f"[OK] Saved to sum_result: {final_filename}")
+        return final_filename
+    except Exception as e:
+        print(f"[ERROR] Failed to save CSV: {e}")
+        return None
+
+
+def get_all_in_one_params() -> Optional[Tuple[List[int], int]]:
+    """
+    Get parameters for All-in-One mode.
+    Returns: (burst_lengths_list, sample_count) or None if cancelled.
+    """
+    print("\n" + "="*60)
+    print("Mode A: All-in-One Build — Parameter Configuration")
+    print("="*60)
+    print("\nThis mode will automatically test ALL 7 algorithms for each")
+    print("specified burst length. Results are saved to sum_result/ and")
+    print("comparison plots are generated automatically upon completion.")
+    print()
+    print("[IMPORTANT] Please confirm that the FPGA is loaded with the")
+    print("            ALL_IN_ONE_BUILD bitstream (ALL_IN_ONE_BUILD defined")
+    print("            in main_scan_fsm.vh and re-synthesized in Vivado).")
+    confirm = input("Is the ALL_IN_ONE_BUILD bitstream loaded? (y/n): ")
+    if confirm.lower() != 'y':
+        print("[INFO] Please load the ALL_IN_ONE_BUILD bitstream first.")
+        return None
+
+    # Input: Burst lengths
+    while True:
+        print("\nEnter burst lengths to test (space-separated, 1~15):")
+        print("  Examples: '1'        → random single-bit only")
+        print("            '1 5 8'    → random + cluster L=5 + cluster L=8")
+        print("  Note: length=1 is treated as Random Single Bit mode")
+        raw = input("Enter lengths: ").strip()
+        if not raw:
+            print("[ERROR] Please enter at least one length.")
+            continue
+        try:
+            lengths = [int(x) for x in raw.split()]
+            if not lengths:
+                print("[ERROR] Please enter at least one length.")
+                continue
+            invalid = [l for l in lengths if l < 1 or l > 15]
+            if invalid:
+                print(f"[ERROR] Invalid lengths: {invalid}. All must be 1~15.")
+                continue
+            # Remove duplicates while preserving order
+            seen = set()
+            lengths = [l for l in lengths if not (l in seen or seen.add(l))]
+        except ValueError:
+            print("[ERROR] Please enter integers separated by spaces.")
+            continue
+        break
+
+    # Input: Sample count
+    while True:
+        print("\nEnter Sample Count per BER point:")
+        print("  Range: > 0 (Recommended: 10000 ~ 100000)")
+        try:
+            sample_count = int(input("Enter count: "))
+            if sample_count <= 0:
+                print("[ERROR] Count must be greater than 0.")
+                continue
+        except ValueError:
+            print("[ERROR] Input must be an integer.")
+            continue
+        break
+
+    # Summary
+    total_runs = len(lengths) * 7
+    print("\n" + "="*60)
+    print("All-in-One Test Plan:")
+    print(f"  Burst lengths: {lengths}")
+    print(f"  Algorithms: all 7 (algo_id 0~6)")
+    print(f"  Sample count: {sample_count} per BER point")
+    print(f"  Total test runs: {total_runs} ({len(lengths)} lengths × 7 algorithms)")
+    print(f"  Results saved to: {SUM_RESULT_DIR}")
+    print("="*60)
+    confirm = input("Start All-in-One test? (y/n): ")
+    if confirm.lower() != 'y':
+        print("Operation cancelled.")
+        return None
+
+    return lengths, sample_count
+
+
+def run_all_in_one_mode(controller: 'FpgaController', lengths: List[int], sample_count: int):
+    """
+    Run All-in-One mode: iterate over all burst lengths and all 7 algorithms.
+    For each combination, send command → wait for response → save CSV to sum_result/.
+    After all runs complete, call compare_ber_curves.py to generate comparison plots.
+    """
+    os.makedirs(SUM_RESULT_DIR, exist_ok=True)
+
+    total_runs = len(lengths) * 7
+    completed  = 0
+    failed     = 0
+    saved_csvs = []
+
+    print(f"\n[All-in-One] Starting {total_runs} test runs...")
+    print(f"[All-in-One] Results will be saved to: {SUM_RESULT_DIR}")
+
+    for burst_len in lengths:
+        # Determine error_mode from burst_len
+        error_mode = 0 if burst_len == 1 else 1
+        mode_str   = "Random Single Bit" if burst_len == 1 else f"Cluster Burst L={burst_len}"
+
+        for algo_id in range(7):
+            completed += 1
+            algo_name = ALGO_MAP.get(algo_id, f"ID={algo_id}")
+            print(f"\n{'='*70}")
+            print(f"[Run {completed}/{total_runs}] Algo={algo_name} (ID={algo_id})  Mode={mode_str}")
+            print(f"{'='*70}")
+
+            # Send command
+            if not controller.send_command(algo_id, error_mode, burst_len, sample_count):
+                print(f"[ERROR] Failed to send command for algo_id={algo_id}, burst_len={burst_len}")
+                failed += 1
+                continue
+
+            # Receive response
+            result_data = controller.receive_response()
+            if not result_data:
+                print(f"[ERROR] No valid response for algo_id={algo_id}, burst_len={burst_len}")
+                failed += 1
+                continue
+
+            # Print brief summary (last 5 BER points only to avoid clutter)
+            points = result_data.get('points', [])
+            if points:
+                w_valid = ALGO_W_VALID.get(algo_id, 41)
+                print(f"[Summary] Last 5 BER points:")
+                for p in points[-5:]:
+                    ber_act = p['Flip_Count'] / (p['Total_Trials'] * w_valid) if p['Total_Trials'] > 0 else 0.0
+                    print(f"  BER_idx={p['BER_Index']:3d}  BER_act={ber_act:.4f}  "
+                          f"Success_Rate={p['Success_Rate']:.3f}")
+
+            # Save to sum_result
+            # Pass algo_id as override so the CSV is labelled with the correct
+            # algorithm name (FPGA's GlobalInfo.algo_used reflects compile-time
+            # CURRENT_ALGO_ID, not the runtime algo_id sent by the PC).
+            result_data['burst_len'] = burst_len
+            csv_path = save_to_sum_result_csv(result_data, burst_len, algo_id_override=algo_id)
+            if csv_path:
+                saved_csvs.append(csv_path)
+
+    # All runs complete — print summary
+    print(f"\n{'='*70}")
+    print(f"[All-in-One] All runs complete!")
+    print(f"  Total runs:    {total_runs}")
+    print(f"  Successful:    {total_runs - failed}")
+    print(f"  Failed:        {failed}")
+    print(f"  CSVs saved:    {len(saved_csvs)}")
+    print(f"  Output dir:    {SUM_RESULT_DIR}")
+    print(f"{'='*70}")
+
+    if not saved_csvs:
+        print("[WARNING] No CSV files were saved. Skipping comparison plot generation.")
+        return
+
+    # Auto-generate comparison plots using compare_ber_curves.py
+    print("\n[All-in-One] Generating comparison plots via compare_ber_curves.py...")
+    compare_script = os.path.join(SCRIPT_DIR, 'compare_ber_curves.py')
+    if not os.path.exists(compare_script):
+        print(f"[WARNING] compare_ber_curves.py not found at: {compare_script}")
+        print("[WARNING] Please run compare_ber_curves.py manually to generate plots.")
+        return
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, compare_script],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0:
+            print("[OK] Comparison plots generated successfully.")
+            if result.stdout:
+                print(result.stdout)
+        else:
+            print(f"[WARNING] compare_ber_curves.py exited with code {result.returncode}")
+            if result.stderr:
+                print(f"[WARNING] stderr: {result.stderr[:500]}")
+    except subprocess.TimeoutExpired:
+        print("[WARNING] compare_ber_curves.py timed out. Please run it manually.")
+    except Exception as e:
+        print(f"[WARNING] Failed to run compare_ber_curves.py: {e}")
+        print("[INFO] You can run it manually: python compare_ber_curves.py")
+
+
 def main():
     # ─────────────────────────────────────────────────────────────────────────
-    # BUG FIX (Risk #2): Add --port and --baudrate command-line arguments so
-    # the user can specify the correct COM port without editing source code.
-    # The default values fall back to DEFAULT_PORT / DEFAULT_BAUDRATE if the
-    # arguments are not provided.
+    # Command-line arguments
     # ─────────────────────────────────────────────────────────────────────────
     parser = argparse.ArgumentParser(
         description='FPGA Fault-Tolerant Test System Controller',
@@ -792,42 +1043,71 @@ def main():
     )
     args = parser.parse_args()
 
-    # 1. Get User Input
-    params = get_user_input()
-    if not params:
-        return
+    # ─────────────────────────────────────────────────────────────────────────
+    # Mode Selection
+    # ─────────────────────────────────────────────────────────────────────────
+    print("\n" + "="*60)
+    print("FPGA Fault-Tolerant Test System")
+    print("="*60)
+    print("\nSelect Build Mode:")
+    print("  [A] All-in-One Build  — One bitstream, all 7 algorithms")
+    print("      (Requires ALL_IN_ONE_BUILD bitstream loaded on FPGA)")
+    print("  [B] Single Algorithm  — Current single-algorithm build")
+    print("      (Requires specific BUILD_ALGO_xxx bitstream loaded)")
+    print()
 
-    algo_id, error_mode, burst_len, sample_count = params
+    while True:
+        mode = input("Enter mode (A/B): ").strip().upper()
+        if mode in ('A', 'B'):
+            break
+        print("[ERROR] Please enter A or B.")
 
-    # 2. Initialize Serial Port (use CLI args, fall back to defaults)
+    # ─────────────────────────────────────────────────────────────────────────
+    # Initialize Serial Port
+    # ─────────────────────────────────────────────────────────────────────────
     controller = FpgaController(port=args.port, baudrate=args.baudrate)
-
     if not controller.open():
         print("Program exiting.")
         return
 
     try:
-        # 3. Send Command
-        if not controller.send_command(algo_id, error_mode, burst_len, sample_count):
-            print("Failed to send command. Program exiting.")
-            return
+        if mode == 'A':
+            # ─────────────────────────────────────────────────────────────────
+            # Mode A: All-in-One Build
+            # ─────────────────────────────────────────────────────────────────
+            params = get_all_in_one_params()
+            if not params:
+                return
+            lengths, sample_count = params
+            run_all_in_one_mode(controller, lengths, sample_count)
 
-        # 4. Receive and Parse Response
-        result_data = controller.receive_response()
-
-        if result_data:
-            # 5. Display Results
-            print_results_table(result_data)
-
-            # 6. Save to CSV (pass burst_len so it appears in the CSV header)
-            result_data['burst_len'] = burst_len
-            csv_path = save_to_csv(result_data, "test_results.csv")
-
-            # 7. Auto-plot BER curve from the saved CSV
-            if csv_path:
-                _auto_plot(csv_path)
         else:
-            print("No valid data received. Report generation skipped.")
+            # ─────────────────────────────────────────────────────────────────
+            # Mode B: Single Algorithm Build (original logic)
+            # ─────────────────────────────────────────────────────────────────
+            print("\n[Mode B] Single Algorithm Build selected.")
+            print("[IMPORTANT] Ensure the correct BUILD_ALGO_xxx bitstream is loaded.")
+
+            params = get_user_input()
+            if not params:
+                return
+
+            algo_id, error_mode, burst_len, sample_count = params
+
+            if not controller.send_command(algo_id, error_mode, burst_len, sample_count):
+                print("Failed to send command. Program exiting.")
+                return
+
+            result_data = controller.receive_response()
+
+            if result_data:
+                print_results_table(result_data)
+                result_data['burst_len'] = burst_len
+                csv_path = save_to_csv(result_data, "test_results.csv")
+                if csv_path:
+                    _auto_plot(csv_path)
+            else:
+                print("No valid data received. Report generation skipped.")
 
     except KeyboardInterrupt:
         print("\n[WARNING] Test interrupted by user.")

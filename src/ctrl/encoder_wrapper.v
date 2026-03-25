@@ -47,14 +47,15 @@ module encoder_wrapper (
     // =========================================================================
     // 1. Algorithm Selection Parameters (3-bit, matches algo_id in decoder_wrapper.vh)
     // =========================================================================
-    localparam ALGO_2NRM      = 3'd0;
-    localparam ALGO_3NRM      = 3'd1;
-    localparam ALGO_CRRNS_MLD = 3'd2;  // C-RRNS-MLD (encoder_crrns shared)
-    localparam ALGO_CRRNS_MRC = 3'd3;  // C-RRNS-MRC (encoder_crrns shared)
-    localparam ALGO_CRRNS_CRT = 3'd4;  // C-RRNS-CRT (encoder_crrns shared)
-    localparam ALGO_RS        = 3'd5;
+    localparam ALGO_2NRM        = 3'd0;  // 2NRM-RRNS Parallel MLD
+    localparam ALGO_3NRM        = 3'd1;  // 3NRM-RRNS
+    localparam ALGO_CRRNS_MLD   = 3'd2;  // C-RRNS-MLD (encoder_crrns shared)
+    localparam ALGO_CRRNS_MRC   = 3'd3;  // C-RRNS-MRC (encoder_crrns shared)
+    localparam ALGO_CRRNS_CRT   = 3'd4;  // C-RRNS-CRT (encoder_crrns shared)
+    localparam ALGO_RS          = 3'd5;  // RS(12,4)
+    localparam ALGO_2NRM_SERIAL = 3'd6;  // 2NRM-RRNS Serial FSM (same encoder as ALGO_2NRM)
     // Backward compatibility alias
-    localparam ALGO_CRRNS     = 3'd2;
+    localparam ALGO_CRRNS       = 3'd2;  // alias for ALGO_CRRNS_MLD
 
     // =========================================================================
     // 2. Internal Signals for Sub-modules
@@ -78,13 +79,83 @@ module encoder_wrapper (
     wire        done_rs;
 
     // Combined Done
+    // BUG FIX (ALL_IN_ONE_BUILD): In ALL_IN_ONE_BUILD mode, all encoders run
+    // simultaneously. The 'done' signal must come ONLY from the selected encoder
+    // (based on algo_sel), NOT from all encoders OR-ed together. Otherwise the
+    // fastest encoder (e.g. RS at 4 cycles) would trigger 'done' before the
+    // selected encoder (e.g. 2NRM at 7 cycles) has produced valid output,
+    // causing the downstream logic to latch a stale codeword.
+    // In single-build mode, only one encoder is instantiated, so the OR is safe.
+`ifdef ALL_IN_ONE_BUILD
+    reg done_sel;
+    always @(*) begin
+        case (algo_sel)
+            3'd0, 3'd6: done_sel = done_2nrm;   // 2NRM-Parallel and 2NRM-Serial
+            3'd1:       done_sel = done_3nrm;
+            3'd2, 3'd3, 3'd4: done_sel = done_crrns;
+            3'd5:       done_sel = done_rs;
+            default:    done_sel = done_2nrm;
+        endcase
+    end
+    assign done = done_sel;
+`else
     assign done = done_2nrm | done_3nrm | done_crrns | done_rs;
+`endif
 
     // =========================================================================
-    // 3. Sub-module Instantiations (controlled by BUILD_ALGO_xxx macros)
-    //    Only ONE encoder is instantiated per build.
-    //    All others are wire-tied to zero via `else branches.
+    // 3. Sub-module Instantiations
+    //    ALL_IN_ONE_BUILD: All encoders instantiated, runtime algo_sel selects.
+    //    Single build: Only ONE encoder instantiated per build macro.
     // =========================================================================
+
+`ifdef ALL_IN_ONE_BUILD
+    // -------------------------------------------------------------------------
+    // ALL_IN_ONE_BUILD: Instantiate ALL encoders simultaneously.
+    // Runtime selection is handled by the case(algo_sel_latch) mux below.
+    // -------------------------------------------------------------------------
+
+    // 2NRM Encoder (algo_id=0 and algo_id=6 both use this encoder)
+    encoder_2nrm u_enc_2nrm (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .data_in_A(data_in_A), .data_in_B(data_in_B),
+        .residues_out_A(out_2nrm_A), .residues_out_B(out_2nrm_B),
+        .done(done_2nrm)
+    );
+
+    // 3NRM Encoder (algo_id=1)
+    encoder_3nrm u_enc_3nrm (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .data_in_A(data_in_A), .data_in_B(data_in_B),
+        .residues_out_A(out_3nrm_A), .residues_out_B(out_3nrm_B),
+        .done(done_3nrm)
+    );
+
+    // C-RRNS Encoder (algo_id=2,3,4 all share this encoder)
+    wire [63:0] out_crrns_A_64;
+    wire [63:0] out_crrns_B_64;
+    wire        done_crrns_enc;
+    encoder_crrns u_enc_crrns (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .data_in_A(data_in_A), .data_in_B(data_in_B),
+        .residues_out_A(out_crrns_A_64), .residues_out_B(out_crrns_B_64),
+        .done(done_crrns_enc)
+    );
+    assign out_crrns_A = {64'd0, out_crrns_A_64};
+    assign out_crrns_B = {64'd0, out_crrns_B_64};
+    assign done_crrns  = done_crrns_enc;
+
+    // RS Encoder (algo_id=5)
+    encoder_rs u_enc_rs (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .data_in_A(data_in_A), .data_in_B(data_in_B),
+        .residues_out_A(out_rs_A), .residues_out_B(out_rs_B),
+        .done(done_rs)
+    );
+
+`else
+    // -------------------------------------------------------------------------
+    // Single Algorithm Build: Only ONE encoder instantiated per build macro.
+    // -------------------------------------------------------------------------
 
     // --- 2NRM Encoder (also used by 2NRM-Serial, algo_id=6) ---
 `ifdef BUILD_ALGO_2NRM
@@ -164,6 +235,8 @@ module encoder_wrapper (
     assign done_rs  = 1'b0;
 `endif
 
+`endif // ALL_IN_ONE_BUILD
+
     // =========================================================================
     // 4. Output Multiplexing & Metadata Generation (Report-Aligned)
     // =========================================================================
@@ -240,7 +313,7 @@ module encoder_wrapper (
                     cw_len_A   <= 8'd48;
                     cw_len_B   <= 8'd0;
                 end
-                3'd6: begin
+                ALGO_2NRM_SERIAL: begin
                     // 2NRM-Serial: same encoder output as 2NRM-Parallel (W_valid=41)
                     codeword_A <= {192'd0, out_2nrm_A[63:0]};
                     codeword_B <= 256'd0;

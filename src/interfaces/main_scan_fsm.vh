@@ -20,14 +20,27 @@
 // =============================================================================
 // [IMPORTANT] Compile-time Algorithm Selection via Build Macro
 // =============================================================================
-// To switch algorithm:
-//   1. Comment out the current `define BUILD_ALGO_xxx line below
-//   2. Uncomment the desired `define BUILD_ALGO_xxx line
-//   3. Run Implementation in Vivado (full re-synthesis required)
 //
-// Only ONE macro should be defined at a time!
+// *** MODE 1: ALL_IN_ONE_BUILD ***
+//   Uncomment the line below to build ALL 7 algorithms into one bitstream.
+//   The PC-side controller (py_controller_main.py Mode A) will iterate
+//   through all algo_ids automatically. The FPGA selects the active
+//   encoder/decoder at runtime based on the algo_id field in the command frame.
+//   NOTE: This build consumes significantly more FPGA resources (~50% LUT).
 //
-// *** CURRENT BUILD: RS (algo_id=5) ***
+ `define ALL_IN_ONE_BUILD   // Uncomment for All-in-One build (all 7 algorithms)
+//
+// *** MODE 2: Single Algorithm Build (default) ***
+//   Comment out ALL_IN_ONE_BUILD above, then uncomment ONE BUILD_ALGO_xxx below.
+//   Only ONE macro should be defined at a time!
+//
+//   NOTE: When ALL_IN_ONE_BUILD is defined, the BUILD_ALGO_xxx macros below
+//   are completely IGNORED by encoder_wrapper.v and decoder_wrapper.v.
+//   You do NOT need to comment them out — they have no effect in ALL_IN_ONE_BUILD mode.
+//   However, CURRENT_ALGO_ID (derived below) will still reflect whichever
+//   BUILD_ALGO_xxx is active, which is unused in ALL_IN_ONE_BUILD mode.
+//
+// *** CURRENT BUILD: 2NRM-SERIAL (algo_id=6) ***
 // -----------------------------------------------------------------
 // `define BUILD_ALGO_2NRM        // algo_id=0: 2NRM-RRNS,        41b, t=2, ~27 cycles  (parallel MLD)
 // `define BUILD_ALGO_3NRM        // algo_id=1: 3NRM-RRNS,        48b, t=3, ~842 cycles

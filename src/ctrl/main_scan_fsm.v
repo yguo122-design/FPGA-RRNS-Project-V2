@@ -79,6 +79,12 @@ module main_scan_fsm (
     // burst_len: Error burst length (1~15) for error injector.
     // Held stable during the entire sweep.
 
+    input  wire [2:0]  cfg_algo_id,
+    // cfg_algo_id: Runtime algorithm ID from ctrl_register_bank.reg_algo_id[2:0].
+    // Used ONLY in ALL_IN_ONE_BUILD mode to select the active encoder/decoder
+    // and the correct ROM threshold entry at runtime.
+    // In single-build mode, this port is ignored; CURRENT_ALGO_ID is used instead.
+
     input  wire [31:0] seed_in,
     // seed_in: PRBS seed from seed_lock_unit.
 
@@ -210,11 +216,19 @@ module main_scan_fsm (
     wire [31:0] threshold_val;
     wire        thresh_valid;
 
+    // In ALL_IN_ONE_BUILD mode, use runtime cfg_algo_id for ROM lookup.
+    // In single-build mode, use compile-time CURRENT_ALGO_ID.
+`ifdef ALL_IN_ONE_BUILD
+    wire [2:0] active_algo_id = cfg_algo_id;
+`else
+    wire [2:0] active_algo_id = 3'd`CURRENT_ALGO_ID;
+`endif
+
     rom_threshold_ctrl u_rom (
         .clk          (clk),
         .rst_n        (rst_n),
         .req          (rom_req),
-        .algo_id      (3'd`CURRENT_ALGO_ID),
+        .algo_id      (active_algo_id),
         .ber_idx      (ber_cnt),
         .burst_len    (burst_len),
         .threshold_val(threshold_val),
@@ -240,8 +254,8 @@ module main_scan_fsm (
         .clk           (clk),
         .rst_n         (rst_n),
         .start         (eng_start),
-        // Algorithm ID is a compile-time constant for this build (3-bit)
-        .algo_id       (3'd`CURRENT_ALGO_ID),
+        // In ALL_IN_ONE_BUILD: use runtime algo_id; in single-build: compile-time constant
+        .algo_id       (active_algo_id),
         .threshold_val (threshold_val),
         .burst_len     (burst_len),
         .seed_in       (seed_in),
@@ -336,7 +350,7 @@ module main_scan_fsm (
         .rst_n        (rst_n),
         // Control
         .start        (asm_start),
-        .algo_id_in   (3'd`CURRENT_ALGO_ID),
+        .algo_id_in   (active_algo_id),     // ALL_IN_ONE: runtime; single-build: compile-time
         .mode_id_in   (mode_id),            // FIX Issue1: from ctrl_register_bank.reg_error_mode
         // Memory read interface (240-bit)
         .mem_rd_addr  (asm_mem_rd_addr_w),

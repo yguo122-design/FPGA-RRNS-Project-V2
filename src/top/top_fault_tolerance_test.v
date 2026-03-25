@@ -251,6 +251,7 @@ module top_fault_tolerance_test (
         .sample_count (reg_sample_count),
         .mode_id      (reg_error_mode[1:0]),
         .burst_len    (reg_burst_len[3:0]),
+        .cfg_algo_id  (reg_algo_id[2:0]),   // ALL_IN_ONE_BUILD: runtime algo_id from PC command
         .seed_in      (seed_locked),
         .load_seed    (cfg_update_pulse),
         .busy         (fsm_busy),

@@ -66,10 +66,91 @@ module decoder_wrapper (
 );
 
     // =========================================================================
-    // Decoder Instantiations (controlled by BUILD_ALGO_xxx macros)
-    //   Only ONE decoder is instantiated per build.
-    //   All others are wire-tied to zero via `else branches.
+    // Decoder Instantiations
+    //   ALL_IN_ONE_BUILD: All decoders instantiated, runtime algo_id selects.
+    //   Single build: Only ONE decoder instantiated per build macro.
     // =========================================================================
+
+`ifdef ALL_IN_ONE_BUILD
+    // -------------------------------------------------------------------------
+    // ALL_IN_ONE_BUILD: Instantiate ALL 7 decoders simultaneously.
+    // Runtime selection is handled by the case(algo_id) mux below.
+    // -------------------------------------------------------------------------
+
+    wire [`DEC_DATA_WIDTH-1:0] dec_2nrm_data;
+    wire                       dec_2nrm_valid;
+    wire                       dec_2nrm_uncorr;
+    decoder_2nrm u_dec_2nrm (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_2nrm_data), .valid(dec_2nrm_valid),
+        .uncorrectable(dec_2nrm_uncorr)
+    );
+
+    wire [`DEC_DATA_WIDTH-1:0] dec_3nrm_data;
+    wire                       dec_3nrm_valid;
+    wire                       dec_3nrm_uncorr;
+    decoder_3nrm u_dec_3nrm (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_3nrm_data), .valid(dec_3nrm_valid),
+        .uncorrectable(dec_3nrm_uncorr)
+    );
+
+    wire [`DEC_DATA_WIDTH-1:0] dec_crrns_mld_data;
+    wire                       dec_crrns_mld_valid;
+    wire                       dec_crrns_mld_uncorr;
+    decoder_crrns_mld u_dec_crrns_mld (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_crrns_mld_data), .valid(dec_crrns_mld_valid),
+        .uncorrectable(dec_crrns_mld_uncorr)
+    );
+
+    wire [`DEC_DATA_WIDTH-1:0] dec_crrns_mrc_data;
+    wire                       dec_crrns_mrc_valid;
+    wire                       dec_crrns_mrc_uncorr;
+    decoder_crrns_mrc u_dec_crrns_mrc (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_crrns_mrc_data), .valid(dec_crrns_mrc_valid),
+        .uncorrectable(dec_crrns_mrc_uncorr)
+    );
+
+    wire [`DEC_DATA_WIDTH-1:0] dec_crrns_crt_data;
+    wire                       dec_crrns_crt_valid;
+    wire                       dec_crrns_crt_uncorr;
+    decoder_crrns_crt u_dec_crrns_crt (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_crrns_crt_data), .valid(dec_crrns_crt_valid),
+        .uncorrectable(dec_crrns_crt_uncorr)
+    );
+
+    wire [`DEC_DATA_WIDTH-1:0] dec_rs_data;
+    wire                       dec_rs_valid;
+    wire                       dec_rs_uncorr;
+    decoder_rs u_dec_rs (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_rs_data), .valid(dec_rs_valid),
+        .uncorrectable(dec_rs_uncorr)
+    );
+
+    wire [`DEC_DATA_WIDTH-1:0] dec_2nrm_serial_data;
+    wire                       dec_2nrm_serial_valid;
+    wire                       dec_2nrm_serial_uncorr;
+    decoder_2nrm_serial u_dec_2nrm_serial (
+        .clk(clk), .rst_n(rst_n), .start(start),
+        .residues_in(residues_in),
+        .data_out(dec_2nrm_serial_data), .valid(dec_2nrm_serial_valid),
+        .uncorrectable(dec_2nrm_serial_uncorr)
+    );
+
+`else
+    // -------------------------------------------------------------------------
+    // Single Algorithm Build: Only ONE decoder instantiated per build macro.
+    // -------------------------------------------------------------------------
 
     // --- 2NRM Decoder ---
 `ifdef BUILD_ALGO_2NRM
@@ -189,6 +270,8 @@ module decoder_wrapper (
     wire                       dec_2nrm_serial_valid  = 1'b0;
     wire                       dec_2nrm_serial_uncorr = 1'b0;
 `endif
+
+`endif // ALL_IN_ONE_BUILD
 
     // =========================================================================
     // 3. Output Mux: Route Selected Algorithm's Outputs
