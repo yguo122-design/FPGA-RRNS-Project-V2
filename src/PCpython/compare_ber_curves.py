@@ -84,6 +84,10 @@ SCENE_INFO = {
                   'Decode Success Rate vs Actual BER — Cluster Burst (Length=5)'),
     'cluster8':  ('comparison_cluster_burst_len8',
                   'Decode Success Rate vs Actual BER — Cluster Burst (Length=8)'),
+    'cluster12': ('comparison_cluster_burst_len12',
+                  'Decode Success Rate vs Actual BER — Cluster Burst (Length=12)'),
+    'cluster15': ('comparison_cluster_burst_len15',
+                  'Decode Success Rate vs Actual BER — Cluster Burst (Length=15)'),
 }
 
 
@@ -162,6 +166,10 @@ def classify_scene(metadata: dict) -> str | None:
         return 'cluster5'
     if burst == 8:
         return 'cluster8'
+    if burst == 12:
+        return 'cluster12'
+    if burst == 15:
+        return 'cluster15'
     return None
 
 
@@ -208,6 +216,11 @@ def load_all_data(data_dir: str):
             continue
 
         # Extract X/Y
+        # X-axis: BER_Value_Act (actual measured BER).
+        # Note: for old FPGA data collected before Bug #86 fix, the actual BER
+        # saturates at 1/w_valid (e.g. ~1.05% for C-RRNS-MLD). After re-synthesis
+        # with the bit-scan Bernoulli injection model (Bug #86 fix), actual BER
+        # will correctly track target BER up to 10%.
         ber_list = []
         sr_list  = []
         for row in data_rows:
@@ -288,6 +301,7 @@ def plot_scene(scene_key: str, algo_data: dict, output_dir: str, timestamp: str)
     fig, ax = plt.subplots(figsize=(11, 7))
 
     all_ber_max = 0.0
+    all_sr_min  = 1.0   # Track global minimum SR across all algorithms
 
     # Plot in fixed algorithm order (skip missing ones)
     for algo in ALGO_ORDER:
@@ -306,6 +320,7 @@ def plot_scene(scene_key: str, algo_data: dict, output_dir: str, timestamp: str)
         sr_arr   = sr_arr[sort_idx]
 
         all_ber_max = max(all_ber_max, ber_arr.max())
+        all_sr_min  = min(all_sr_min,  sr_arr.min())   # Track minimum SR
 
         # Smooth fit line
         sr_smooth = smooth(sr_arr)
@@ -339,8 +354,17 @@ def plot_scene(scene_key: str, algo_data: dict, output_dir: str, timestamp: str)
     ax.xaxis.set_major_locator(ticker.MultipleLocator(tick_step))
     ax.set_xlim(left=0, right=x_max * 1.05)
 
-    # Y-axis: percentage format, start from 40% to zoom in on effective data range
-    ax.set_ylim(0.40, 1.02)
+    # Y-axis: auto-adapt lower limit to data minimum (with 5% margin).
+    # BUG FIX: Previously fixed at 0.40, which caused curves with SR > 80%
+    # to appear nearly flat (visually indistinguishable from 100%).
+    # Now the lower limit is computed from the actual data minimum so that
+    # all SR variation is clearly visible regardless of the algorithm's
+    # error-correction capability.
+    y_margin = 0.05
+    y_min = max(0.0, all_sr_min - y_margin)
+    # Round down to nearest 5% for clean tick alignment
+    y_min = max(0.0, np.floor(y_min / 0.05) * 0.05)
+    ax.set_ylim(y_min, 1.02)
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(
         lambda y, _: f'{y:.0%}'
     ))
@@ -408,7 +432,7 @@ def main():
     print()
 
     # Generate one plot per scene
-    for scene_key in ['random', 'cluster5', 'cluster8']:
+    for scene_key in ['random', 'cluster5', 'cluster8', 'cluster12', 'cluster15']:
         if scene_key not in scenes or not scenes[scene_key]:
             print(f"[INFO] Scene '{scene_key}': no data found, skipping.")
             continue

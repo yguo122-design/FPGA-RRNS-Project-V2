@@ -74,10 +74,10 @@ UTILIZATION_DATA = {
     # Algorithm name must match the display order in ALGO_ORDER below
     # '2NRM-RRNS' = 2NRM-RRNS-Parallel (displayed as "2NRM-RRNS-Parallel" in chart)
     '2NRM-RRNS': {
-        'LUT':  22,    # ← Fill from 'utilization 2NRM.png'  (Util% value)
-        'FF':   29,    # ← Fill from 'utilization 2NRM.png'  (Util% value)
+        'LUT':  51,    # ← Fill from 'utilization 2NRM.png'  (Util% value)
+        'FF':   41,    # ← Fill from 'utilization 2NRM.png'  (Util% value)
         'DSP':  0,     # ← Fill from 'utilization 2NRM.png'  (Util% value)
-        'BRAM': 20,    # ← Fill from 'utilization 2NRM.png'  (Util% value)
+        'BRAM': 21,    # ← Fill from 'utilization 2NRM.png'  (Util% value)
     },
     # 2NRM-RRNS-Serial: same encoder as 2NRM-Parallel, only decoder differs
     '2NRM-RRNS-Serial': {
@@ -87,34 +87,28 @@ UTILIZATION_DATA = {
         'BRAM': 21,     # ← Fill from 'utilization 2NRM-Serial.png' (Util% value)
     },
     '3NRM-RRNS': {
-        'LUT':  5,     # ← Fill from 'utilization 3NRM.png'  (Util% value)
+        'LUT':  7,     # ← Fill from 'utilization 3NRM.png'  (Util% value)
         'FF':   2,     # ← Fill from 'utilization 3NRM.png'  (Util% value)
         'DSP':  1,     # ← Fill from 'utilization 3NRM.png'  (Util% value)
-        'BRAM': 20,    # ← Fill from 'utilization 3NRM.png'  (Util% value)
+        'BRAM': 21,    # ← Fill from 'utilization 3NRM.png'  (Util% value)
     },
     'C-RRNS-MLD': {
         'LUT':  6,     # ← Fill from 'utilization C-RRNS-MLD.png'
         'FF':   2,
         'DSP':  1,
-        'BRAM': 19,
+        'BRAM': 21,
     },
     'C-RRNS-MRC': {
         'LUT':  2,     # ← Fill from 'utilization C-RRNS-MRC.png'
         'FF':   1,
         'DSP':  1,
-        'BRAM': 20,
-    },
-    'C-RRNS-CRT': {
-        'LUT':  2,     # ← Fill from 'utilization C-RRNS-CRT.png'
-        'FF':   1,
-        'DSP':  1,
-        'BRAM': 20,
+        'BRAM': 21,
     },
     'RS': {
         'LUT':  3,     # ← Fill from 'utilization RS.png'
         'FF':   2,
         'DSP':  0,
-        'BRAM': 20,
+        'BRAM': 21,
     },
 }
 
@@ -133,7 +127,6 @@ ALGO_ORDER = [
     '3NRM-RRNS',
     'C-RRNS-MLD',
     'C-RRNS-MRC',
-    'C-RRNS-CRT',
     'RS',
 ]
 
@@ -181,7 +174,6 @@ def check_data_filled():
                 '3NRM-RRNS':        'utilization 3NRM.png',
                 'C-RRNS-MLD':       'utilization C-RRNS-MLD.png',
                 'C-RRNS-MRC':       'utilization C-RRNS-MRC.png',
-                'C-RRNS-CRT':       'utilization C-RRNS-CRT.png',
                 'RS':               'utilization RS.png',
             }
             print(f"    {algo:20s} ← {name_map.get(algo, '?')}")
@@ -197,7 +189,6 @@ def open_screenshots():
         '3NRM-RRNS':  'utilization 3NRM.png',
         'C-RRNS-MLD': 'utilization C-RRNS-MLD.png',
         'C-RRNS-MRC': 'utilization C-RRNS-MRC.png',
-        'C-RRNS-CRT': 'utilization C-RRNS-CRT.png',
         'RS':         'utilization RS.png',
     }
     print("[INFO] Opening utilization screenshots for reference...")

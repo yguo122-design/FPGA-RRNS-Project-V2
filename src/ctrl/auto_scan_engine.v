@@ -3,7 +3,7 @@
 // Description: Auto Scan Engine - Single-Test Pipeline Orchestrator
 //              Part of FPGA Multi-Algorithm Fault-Tolerant Test System
 //              Implements Design Doc Section 2.3.3.5 (Green Block)
-// Version: v1.1 (Single-Channel Mode: Channel B fully disabled)
+// Version: v1.2 (Multi-Bit Injection for Random Single Bit mode)
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // PIPELINE OVERVIEW (Single-Channel Mode):
@@ -25,20 +25,29 @@
 //   7. uncorr_cnt = {1'b0, dec_uncorr_a} (was {dec_uncorr_b, dec_uncorr_a})
 //
 // INJECTION DECISION:
-//   The engine contains an internal 32-bit LFSR for injection probability.
-//   At the start of each trial, the LFSR is compared against threshold_val:
-//     lfsr_val < threshold_val → inject_en = 1 (inject error)
+//   burst_len == 1 (Random Single Bit): Multi-bit Bernoulli scan mode.
+//     For each bit position 0..(w_valid-1), the LFSR is advanced and compared
+//     against threshold_val directly. If lfsr < threshold_val, that bit is
+//     flipped. This allows actual BER to reach up to 100% without saturation.
+//     ROM stores: threshold_val = BER_target * (2^32 - 1)  (no ×64 factor).
+//     P(flip per bit) = threshold_val / (2^32 - 1) = BER_target  ✓
+//
+//   burst_len > 1 (Cluster Burst): Original single-injection ROM mode.
+//     lfsr_val < threshold_val → inject_en = 1 (inject one burst)
 //     lfsr_val >= threshold_val → inject_en = 0 (pass through)
+//     Cluster mode is completely unchanged.
 //
 // FSM STATES (per auto_scan_engine.vh):
 //   IDLE → CONFIG → GEN_WAIT → ENC_WAIT → INJ_WAIT → DEC_WAIT → COMP_WAIT → DONE
+//   INJ_WAIT for burst_len=1: iterates w_valid times (bit-scan sub-loop)
+//   INJ_WAIT for burst_len>1: original 2-cycle ROM pipeline wait
 //
 // PIPELINE LATENCY:
 //   encoder_wrapper:     6 cycles (v2.4 single-channel)
-//   error_injector_unit: 2 cycles (registered output, 2-cycle pipeline)
+//   error_injector_unit: 2 cycles (registered output, 2-cycle pipeline, burst only)
+//   bit-scan injection:  w_valid cycles (max 89 for C-RRNS, burst_len=1 only)
 //   decoder_wrapper:     ~12 cycles (decoder_2nrm v2.29 pipeline)
 //   result_comparator:   1 cycle (registered comparison)
-//   Total: ~39 cycles per trial (matches observed Clk_Count/trial = 39)
 // =============================================================================
 
 `include "auto_scan_engine.vh"
@@ -112,6 +121,17 @@ module auto_scan_engine (
     // =========================================================================
     // 2. Internal LFSR for Injection Probability Decision
     // =========================================================================
+    // v1.3 FIX (Bug #93): LFSR now only advances during ENG_STATE_INJ_WAIT.
+    // Previously the LFSR was free-running (advancing every clock cycle),
+    // which caused the LFSR state at injection time to depend on the decoder
+    // latency. Since Parallel (~73 cycles) and Serial (~412 cycles) decoders
+    // have different latencies, they sampled different LFSR sequence segments,
+    // producing different error clustering patterns and thus different SR curves
+    // even though both implement the same MLD algorithm.
+    //
+    // By freezing the LFSR outside of INJ_WAIT, the injection sequence is
+    // independent of decoder latency, ensuring fair comparison between
+    // architectures with different pipeline depths.
     reg  [31:0] inj_lfsr;
     wire [31:0] inj_lfsr_next;
     wire        inj_fb;
@@ -126,9 +146,41 @@ module auto_scan_engine (
         inj_lfsr[1]  ^ inj_fb
     };
 
+    // LFSR advances ONLY during ENG_STATE_INJ_WAIT (frozen during decode/encode)
+    // This ensures injection sequence is independent of decoder latency.
+    //
+    // FIXED SEED MODE (for Parallel vs Serial equivalence testing):
+    //   Set FIXED_SEED_TEST = 1 to use a hardcoded seed (32'hACE12345).
+    //   Both Parallel and Serial will use the same LFSR sequence, allowing
+    //   direct comparison of SR curves to verify algorithmic equivalence.
+    //   Set FIXED_SEED_TEST = 0 (default) to restore random seed behavior.
+    localparam FIXED_SEED_TEST = 0;  // 1=fixed seed for testing, 0=random seed (normal)
+    localparam [31:0] FIXED_SEED_VAL = 32'hACE12345;
+
+    // LFSR_ADVANCE_TEST: Verification mode for LFSR clustering hypothesis.
+    // When set to 1, the LFSR advances 32 EXTRA times after each bit evaluation
+    // in the bit-scan loop, breaking the linear correlation between consecutive
+    // bit positions. If SR drops to match MATLAB after this change, it confirms
+    // that LFSR clustering is the cause of FPGA SR > MATLAB SR.
+    // Set back to 0 after verification.
+    localparam LFSR_ADVANCE_TEST = 0;  // 1=advance 32 extra times per bit, 0=normal
+    localparam [4:0] LFSR_EXTRA_ADVANCES = 5'd31;  // 31 extra = 32 total per bit
+
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) inj_lfsr <= 32'hDEADBEEF;
-        else        inj_lfsr <= inj_lfsr_next;
+        if (!rst_n) begin
+            if (FIXED_SEED_TEST)
+                inj_lfsr <= FIXED_SEED_VAL;  // Fixed seed for equivalence testing
+            else
+                inj_lfsr <= 32'hDEADBEEF;   // Default reset value (overwritten by seed_in)
+        end else if (FIXED_SEED_TEST && state == `ENG_STATE_CONFIG) begin
+            // Per-trial LFSR reset: reload fixed seed at the start of each trial.
+            // This ensures Parallel and Serial use IDENTICAL LFSR sequences for
+            // each trial, eliminating PRBS sampling differences due to different
+            // decode latencies. Used for Parallel vs Serial equivalence testing.
+            inj_lfsr <= FIXED_SEED_VAL;
+        end else if (state == `ENG_STATE_INJ_WAIT)
+            inj_lfsr <= inj_lfsr_next;
+        // else: LFSR frozen — holds value during all other states
     end
 
     reg inject_en_latch;
@@ -184,8 +236,29 @@ module auto_scan_engine (
     reg [7:0]  cw_len_latch;
     reg        enc_done_d1;
 
-    // BUG FIX #33: 2-bit counter for INJ_WAIT state
+    // BUG FIX #33: 2-bit counter for INJ_WAIT state (burst mode)
     reg [1:0]  inj_wait_cnt;
+
+    // =========================================================================
+    // Bit-Scan Multi-Injection Registers (burst_len=1 / Random Single Bit mode)
+    // =========================================================================
+    // bit_scan_pos: current bit position being evaluated (0 to w_valid-1)
+    // bit_scan_cw:  accumulated codeword with flipped bits
+    // bit_scan_flips: total bits flipped so far
+    //
+    // threshold_per_bit: the per-bit flip probability threshold.
+    //   ROM stores: threshold_val = BER_target * (2^32 - 1)  (for burst_len=1)
+    //   FPGA uses:  if (inj_lfsr < threshold_val) → flip this bit
+    //   P(flip) = threshold_val / (2^32 - 1) = BER_target  ✓
+    //   No shift needed — gen_rom.py now stores the correct per-bit probability
+    //   directly (no ×64 compensation factor for burst_len=1).
+    reg [6:0]  bit_scan_pos;    // 7-bit: supports up to 127 bit positions
+    reg [63:0] bit_scan_cw;     // Accumulated codeword during bit-scan
+    reg [6:0]  bit_scan_flips;  // Flip count accumulator (7-bit: max 89 flips)
+    // LFSR_ADVANCE_TEST: extra advance counter (0..31 for 31 extra advances per bit)
+    reg [4:0]  lfsr_skip_cnt;   // Counts extra LFSR advances per bit position
+    wire [31:0] threshold_per_bit;
+    assign threshold_per_bit = threshold_val;  // Direct use: ROM stores BER*(2^32-1)
 
     // Encoder and decoder latency measurement counters
     reg [11:0] enc_lat_cnt;   // Counts cycles in ENC_WAIT (enc_start to enc_done_d1)
@@ -330,6 +403,10 @@ module auto_scan_engine (
             // inj_out_b_latch  <= 64'd0;  // SINGLE-CHANNEL: disabled
             enc_lat_cnt      <= 12'd0;
             dec_lat_cnt      <= 12'd0;
+            bit_scan_pos     <= 7'd0;
+            bit_scan_cw      <= 64'd0;
+            bit_scan_flips   <= 7'd0;
+            lfsr_skip_cnt    <= 5'd0;
 
         end else begin
             // Default: deassert single-cycle control signals
@@ -412,32 +489,114 @@ module auto_scan_engine (
                 end
 
                 // =============================================================
-                // INJ_WAIT: Wait for error injector to produce output
-                //   BUG FIX #33: 2-cycle pipeline latency, use 3-cycle counter
+                // INJ_WAIT: Error injection — two paths based on burst_len:
+                //
+                // PATH A (burst_len == 1): Bit-scan Bernoulli multi-injection.
+                //   Iterates over each bit position 0..(cw_len_latch-1).
+                //   Each cycle: advance LFSR, compare against threshold_per_bit.
+                //   If lfsr < threshold_per_bit → flip that bit in bit_scan_cw.
+                //   After all bits scanned, latch result and proceed to DEC_WAIT.
+                //   This allows actual BER to reach up to 10% without saturation.
+                //
+                // PATH B (burst_len > 1): Original ROM-based single burst injection.
+                //   2-cycle pipeline wait (BUG FIX #33), unchanged from v1.1.
                 // =============================================================
                 `ENG_STATE_INJ_WAIT: begin
                     if (dec_timeout_flag) begin
-                        result_pass  <= 1'b0;
-                        inj_wait_cnt <= 2'd0;
-                        state        <= `ENG_STATE_DONE;
-                    end else if (inj_wait_cnt < 2'd2) begin
-                        inj_wait_cnt <= inj_wait_cnt + 2'd1;
+                        result_pass    <= 1'b0;
+                        inj_wait_cnt   <= 2'd0;
+                        bit_scan_pos   <= 7'd0;
+                        bit_scan_cw    <= 64'd0;
+                        bit_scan_flips <= 7'd0;
+                        state          <= `ENG_STATE_DONE;
+
+                    end else if (burst_len == 4'd1) begin
+                        // ─────────────────────────────────────────────────────
+                        // PATH A: Bit-scan Bernoulli injection (burst_len=1)
+                        // ─────────────────────────────────────────────────────
+                        // Cycle 0 (bit_scan_pos==0): Initialize accumulator only.
+                        //   bit_scan_cw  ← enc_out_a_latch (clean codeword)
+                        //   bit_scan_pos ← 1 (advance to first evaluation cycle)
+                        //
+                        // Cycles 1..w_valid (bit_scan_pos==1..w_valid):
+                        //   Evaluate bit (bit_scan_pos-1) using current inj_lfsr.
+                        //   inj_lfsr advances automatically every clock.
+                        //   If lfsr < threshold_per_bit → flip bit (bit_scan_pos-1).
+                        //
+                        // Cycle w_valid+1 (bit_scan_pos==w_valid+1): Done.
+                        //   Latch bit_scan_cw → inj_out_a_latch, proceed to DEC_WAIT.
+                        //
+                        // Total latency: w_valid + 2 cycles (init + w_valid evals + done)
+                        // ─────────────────────────────────────────────────────
+                        if (bit_scan_pos == 7'd0) begin
+                            // Cycle 0: Initialize accumulator, no bit evaluation yet
+                            bit_scan_cw    <= enc_out_a_latch;
+                            bit_scan_flips <= 7'd0;
+                            lfsr_skip_cnt  <= 5'd0;
+                            bit_scan_pos   <= 7'd1;  // Advance to first evaluation
+
+                        end else if (bit_scan_pos <= {1'b0, cw_len_latch}) begin
+                            // Cycles 1..w_valid: Evaluate bit (bit_scan_pos-1)
+                            // LFSR_ADVANCE_TEST: first cycle evaluates the bit,
+                            // then lfsr_skip_cnt counts 31 extra LFSR advances
+                            // before moving to the next bit position.
+                            if (LFSR_ADVANCE_TEST) begin
+                                if (lfsr_skip_cnt == 5'd0) begin
+                                    // First cycle: evaluate this bit
+                                    if (inj_lfsr < threshold_per_bit) begin
+                                        bit_scan_cw    <= bit_scan_cw ^ (64'd1 << (bit_scan_pos - 7'd1));
+                                        bit_scan_flips <= bit_scan_flips + 7'd1;
+                                    end
+                                    lfsr_skip_cnt <= 5'd1;  // Start extra advances
+                                end else if (lfsr_skip_cnt < LFSR_EXTRA_ADVANCES) begin
+                                    // Extra advance cycles: just let LFSR run
+                                    lfsr_skip_cnt <= lfsr_skip_cnt + 5'd1;
+                                end else begin
+                                    // Done with extra advances: move to next bit
+                                    lfsr_skip_cnt <= 5'd0;
+                                    bit_scan_pos  <= bit_scan_pos + 7'd1;
+                                end
+                            end else begin
+                                // Normal mode: evaluate and advance immediately
+                                if (inj_lfsr < threshold_per_bit) begin
+                                    bit_scan_cw    <= bit_scan_cw ^ (64'd1 << (bit_scan_pos - 7'd1));
+                                    bit_scan_flips <= bit_scan_flips + 7'd1;
+                                end
+                                bit_scan_pos <= bit_scan_pos + 7'd1;
+                            end
+
+                        end else begin
+                            // All bits scanned — latch result and proceed
+                            inj_out_a_latch <= bit_scan_cw;
+                            was_injected    <= (bit_scan_flips != 7'd0);
+                            flip_count_a    <= bit_scan_flips[5:0];  // Saturate at 63
+                            bit_scan_pos    <= 7'd0;   // Reset for next trial
+                            bit_scan_cw     <= 64'd0;
+                            bit_scan_flips  <= 7'd0;
+                            dec_lat_cnt     <= 12'd0;
+                            dec_start       <= 1'b1;
+                            state           <= `ENG_STATE_DEC_WAIT;
+                        end
+
                     end else begin
-                        // Cycle 2: inj_out_a is now valid
-                        inj_out_a_latch <= inj_out_a;
-                        // inj_out_b_latch <= inj_out_b;  // SINGLE-CHANNEL: disabled
-                        inj_wait_cnt    <= 2'd0;
+                        // ─────────────────────────────────────────────────────
+                        // PATH B: ROM-based single burst injection (burst_len>1)
+                        // Original logic — BUG FIX #33: 2-cycle pipeline wait
+                        // ─────────────────────────────────────────────────────
+                        if (inj_wait_cnt < 2'd2) begin
+                            inj_wait_cnt <= inj_wait_cnt + 2'd1;
+                        end else begin
+                            // Cycle 2: inj_out_a is now valid
+                            inj_out_a_latch <= inj_out_a;
+                            inj_wait_cnt    <= 2'd0;
 
-                        // Record injection metadata (Channel A only)
-                        // flip_count_b is not assigned here in single-channel mode.
-                        // It is held at its reset value (6'd0) by the reset block above.
-                        was_injected <= inject_en_latch;
-                        flip_count_a <= inj_flip_a;
-                        // flip_count_b <= inj_flip_b;  // SINGLE-CHANNEL: Channel B disabled
+                            was_injected <= inject_en_latch;
+                            flip_count_a <= inj_flip_a;
 
-                        dec_lat_cnt <= 12'd0;  // Reset decoder latency counter
-                        dec_start   <= 1'b1;
-                        state       <= `ENG_STATE_DEC_WAIT;
+                            dec_lat_cnt <= 12'd0;
+                            dec_start   <= 1'b1;
+                            state       <= `ENG_STATE_DEC_WAIT;
+                        end
                     end
                 end
 

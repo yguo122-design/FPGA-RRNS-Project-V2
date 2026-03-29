@@ -144,4 +144,3 @@ set_property MAX_FANOUT 2 [get_cells -hierarchical -filter {NAME =~ *x_mod53_ste
 ## NOTE: ILA probes are added via Vivado GUI "Set Up Debug" after synthesis.
 ## Net names change with each synthesis run, so do not hardcode them here.
 
-

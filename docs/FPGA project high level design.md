@@ -724,13 +724,6 @@ endmodule
 **BER 定义**：
 本系统定义的 BER (Bit Error Rate) 为 **注入的错误比特总数** 与 **编码后有效信息比特总数** 之比。该定义反映了编码数据流在传输或存储过程中的真实误码水平。
 
-$$ BER_{target} = \frac{\text{Total Flipped Bits}}{\text{Total Valid Codeword Bits}} = \frac{N_{samples} \times P_{trigger} \times L}{N_{samples} \times W_{valid}} $$
-
-其中：
-*   $W_{valid}$：当前 ECC 算法编码后的有效位宽（见下表），**不包含填充位 (Padding)**。
-*   $L$：突发错误长度 (Burst_Len)。
-*   $P_{trigger}$：每个样本触发注入的概率。
-
 | ECC Type | $W_{valid}$ (bits) | 说明 |
 | :--- | :--- | :--- |
 | RS | 48 | 4+4+4+4 + 4×8 = 48 |
@@ -740,11 +733,54 @@ $$ BER_{target} = \frac{\text{Total Flipped Bits}}{\text{Total Valid Codeword Bi
 | 3NRM-RRNS | 48 | 6+6+7 + 5+5+5+5+4 = 48 |
 | 2NRM-RRNS | 41 | 9+8 + 6+6+6+6 = 41 |
 
-**触发概率计算公式**：
-$$ P_{trigger} = \frac{BER_{target} \times W_{valid}}{L} $$
+本系统根据 `burst_len` 采用**两种不同的注入模型**，以确保 actual BER 在 0%~10% 全范围内准确跟踪 target BER：
 
-**阈值整数计算**：
-$$ Threshold\_Int = \text{round}\left( \frac{BER_{target} \times W_{valid}}{L} \times (2^{32}-1) \right) $$
+---
+
+**模型 A：Bit-Scan Bernoulli 模型（`burst_len == 1`，Random Single Bit 模式）**
+
+> **v2.2 新增**：为解决单次注入模型导致 actual BER 饱和在 `1/w_valid` 的问题（Bug #86），引入 Bit-Scan Bernoulli 多次注入模型。
+
+每次 trial 遍历 codeword 的每个 bit（位置 0 到 $W_{valid}-1$），对每个 bit 独立做 Bernoulli 翻转决策：
+
+$$P(\text{flip bit } i) = \frac{Threshold\_Int}{2^{32}} = BER_{target}$$
+
+**期望翻转数**：$E[\text{flips}] = W_{valid} \times BER_{target}$，因此 $E[\text{actual BER}] = BER_{target}$ ✓
+
+**阈值计算**（ROM 存储值，含 64-slot 补偿因子）：
+$$Threshold\_Int = \text{round}\left( BER_{target} \times 64 \times (2^{32}-1) \right)$$
+
+**FPGA 使用时**，将 ROM 值右移 6 位还原为纯 per-bit 概率：
+$$threshold\_per\_bit = Threshold\_Int \gg 6 = \text{round}(BER_{target} \times (2^{32}-1))$$
+
+**工作原理**（在 `auto_scan_engine.v` 的 `ENG_STATE_INJ_WAIT` 中）：
+1. 初始化：`bit_scan_cw ← enc_out_a_latch`，`bit_scan_pos ← 1`
+2. 对每个 bit 位置（`bit_scan_pos` 从 1 到 $W_{valid}$）：
+   - LFSR 推进一步（自动）
+   - 若 `inj_lfsr < threshold_per_bit` → 翻转 bit（`bit_scan_pos - 1`）
+3. 完成后：`inj_out_a_latch ← bit_scan_cw`，进入 DEC_WAIT
+
+**延迟**：$W_{valid} + 2$ 个时钟周期（最大 91 周期，C-RRNS）
+
+---
+
+**模型 B：ROM 单次 Burst 注入模型（`burst_len > 1`，Cluster Burst 模式）**
+
+每次 trial 做一次二值注入决策，触发则注入一个连续 burst：
+
+$$BER_{target} = \frac{P_{trigger} \times L}{W_{valid}}$$
+
+**触发概率**：$P_{trigger} = \frac{BER_{target} \times W_{valid}}{L}$
+
+**阈值整数计算**（含 64-slot 补偿因子，见 Bug #62 修复）：
+$$Threshold\_Int = \text{round}\left( \frac{BER_{target} \times W_{valid}}{L} \times \frac{64}{W_{valid} - L + 1} \times (2^{32}-1) \right)$$
+
+**工作原理**：
+- LFSR 输出 32-bit 随机数 $R$
+- 若 $R < Threshold\_Int$ → 触发注入（查 ROM 获取 burst 错误图样）
+- 否则 → 不注入
+
+**注意**：此模型每次 trial 最多注入一次 burst，actual BER 上限为 $L/W_{valid}$。对于 `burst_len=5`（C-RRNS）上限约 8.2%，`burst_len=8` 上限约 13.1%，在 0~10% 测试范围内基本可用。
 
  **💡 设计备注**：
  *   虽然 FPGA 内部采用 64-bit 并行总线处理，但 BER 统计仅针对 $W_{valid}$ 部分。填充位 (Padding) 可能被翻转，但不计入 BER 分母，也不影响解码器对有效数据的恢复能力评估。
@@ -752,22 +788,33 @@ $$ Threshold\_Int = \text{round}\left( \frac{BER_{target} \times W_{valid}}{L} \
 
 
 
-##### **2.3.2.3 FPGA 实现：32-bit 阈值比较**
+##### **2.3.2.3 FPGA 实现：注入模型选择与阈值使用**
 
-由于 FPGA 无法直接处理浮点概率，我们将 $P_{trigger}$ 映射为一个 32-bit 整数阈值：
+`auto_scan_engine.v` 的 `ENG_STATE_INJ_WAIT` 状态根据 `burst_len` 自动选择注入路径：
 
-$$
-\boxed{Threshold\_Int = \left( \frac{BER_{target} \times W_{valid}}{L} \right) \times (2^{32} - 1)}
-$$
+```verilog
+// 路径选择（auto_scan_engine.v v1.2）
+if (burst_len == 4'd1) begin
+    // PATH A: Bit-scan Bernoulli（Random Single Bit）
+    // threshold_per_bit = threshold_val >> 6
+    // 遍历每个 bit，独立 Bernoulli 决策
+    // 延迟：w_valid + 2 周期
+end else begin
+    // PATH B: ROM-based single burst（Cluster Burst）
+    // 原有 2-cycle ROM pipeline，完全不变
+end
+```
 
-**工作原理**：
-- 每个时钟周期，LFSR 输出一个 32-bit 随机数 $R$。
-- 若 $R < Threshold\_Int$ → 触发注入。
-- 否则 → 不注入。
+**ROM 阈值表（threshold_table.coe）存储的值**：
 
- 💡 举例：若 $BER_{target}=10^{-6}, W_{valid}=48, L=1$，则  
- $P_{trigger} = 48 \times 10^{-6} = 0.000048$  
- $Threshold\_Int = 0.000048 \times (2^{32}-1) \approx 206,158$
+| burst_len | 存储公式 | FPGA 使用方式 |
+|-----------|---------|-------------|
+| 1 | $BER \times 64 \times (2^{32}-1)$ | `>> 6` 还原为 per-bit 概率 |
+| >1 | $\frac{BER \times W_{valid}}{L} \times \frac{64}{W_{valid}-L+1} \times (2^{32}-1)$ | 直接与 LFSR 比较 |
+
+💡 举例（C-RRNS，$BER_{target}=5\%$，$W_{valid}=61$）：
+- `burst_len=1`：ROM 存储 $0.05 \times 64 \times (2^{32}-1) \approx 0x33333333$；FPGA 使用 `>> 6` = $0.05 \times (2^{32}-1) \approx 0x0CCCCCCC$，每个 bit 翻转概率 5%
+- `burst_len=5`：ROM 存储 $\frac{0.05 \times 61}{5} \times \frac{64}{57} \times (2^{32}-1) \approx 0x0E1C71C7$；FPGA 直接比较，触发概率 ≈ 68%，每次注入 5 bits，actual BER ≈ 5%
 
 
 ##### **2.3.2.4 预存储表 (ROM) 制作流程**
@@ -1007,10 +1054,12 @@ endmodule
 *   **安全性**：由于 Python 脚本已经把非法地址（如 $Offset > W_{valid}-L$）的内容填成了 `0`，所以即使 LFSR 生成了很大的随机数，查表出来的 `error_pattern` 也是 0，**不会发生错误注入**。这完美解决了边界溢出问题，且无需 FPGA 内部做任何比较判断。
 
 LFSR 输出分配策略：
-采用单路 32-bit LFSR，每个时钟周期更新一次。其输出直接拆分复用：
+采用单路 32-bit LFSR，**仅在 `ENG_STATE_INJ_WAIT` 状态下推进**（在编码、解码等其他状态保持冻结）。其输出直接拆分复用：
 rnd[31:0]：用于 BER 阈值比较 (if (rnd < threshold)).
 rnd[5:0]：直接作为 random_offset 输入给 ROM 查表模块。
 理由：LFSR 的每一位都具有伪随机性，高低位之间相关性极低，足以满足 BER 测试的统计独立性要求。此方案无需额外 LFSR 实例，也无需多周期等待，实现单周期注入决策。
+
+> **⚠️ Bug #93 修复说明（v2.3，2026-03-26）**：原设计 LFSR 自由运行（每个时钟周期推进），导致不同延迟的解码器（如 Parallel ~73 cycles vs Serial ~412 cycles）在注入时处于不同 LFSR 状态，产生不同的错误聚类模式，使两者 SR 曲线出现系统性差异（10% BER 时差 0.105）。修改后 LFSR 只在注入窗口内推进，注入序列与解码器延迟无关，确保不同架构的公平比较。
 
 
    **资源消耗估算**：
@@ -2264,6 +2313,105 @@ decoder_crrns_mld.v（新建，从 decoder_crrns.v 重命名）
 | `src/interfaces/tx_packet_assembler.vh` | 30 bytes/entry，帧长 3039，Length=0x0BD9 |
 | `src/verify/tx_packet_assembler.v` | 30 字节序列化，end-of-entry 检查 byte_cnt==29 |
 | `src/PCpython/py_controller_main.py` | 解析 30 字节格式，CSV 新增 Enc/Dec Clk 列 |
+
+---
+
+## 📝 版本修订记录 - v2.2 (2026-03-26)
+
+**主要变更：Random Single Bit 注入模型升级为 Bit-Scan Bernoulli 多次注入，解决 actual BER 饱和问题（Bug #86）**
+
+#### 问题背景
+
+原有 `auto_scan_engine.v` 对 `burst_len=1`（Random Single Bit 模式）采用单次二值注入决策：每次 trial 要么注入 1 bit，要么不注入。当 `threshold_val` 被 ROM 存储为 `BER × 64 × 2^32` 并在高 BER 时饱和到 `0xFFFFFFFF` 后，每次 trial 必然注入恰好 1 bit，导致 actual BER 固定在 `1/w_valid`（C-RRNS ≈ 1.64%，2NRM ≈ 2.44%），无法测试 10% 高 BER 场景。
+
+#### 核心变更
+
+| 参数 | 旧值 (v2.1) | 新值 (v2.2) |
+|------|------------|------------|
+| `auto_scan_engine.v` 版本 | v1.1 | **v1.2** |
+| `burst_len=1` 注入模型 | 单次二值决策（inject/no-inject） | **Bit-Scan Bernoulli 多次注入** |
+| `burst_len>1` 注入模型 | ROM 单次 burst（不变） | **ROM 单次 burst（完全不变）** |
+| actual BER 上限（burst_len=1） | `1/w_valid`（C-RRNS ≈ 1.64%） | **无上限，可达 10%** |
+| INJ_WAIT 延迟（burst_len=1） | 3 周期 | **w_valid + 2 周期（最大 91 周期）** |
+| INJ_WAIT 延迟（burst_len>1） | 3 周期（不变） | **3 周期（完全不变）** |
+
+#### 新注入模型说明（Section 2.3.2.2 更新）
+
+**模型 A（burst_len=1）：Bit-Scan Bernoulli**
+- 遍历 codeword 每个 bit（位置 0 到 w_valid-1）
+- 每个 bit 独立 Bernoulli 决策：`P(flip) = threshold_val >> 6 / 2^32 = BER_target`
+- `threshold_val >> 6` 将 ROM 存储的 `BER × 64 × 2^32` 还原为纯 per-bit 概率 `BER × 2^32`
+- `E[actual BER] = BER_target` ✓，支持 0%~10% 全范围
+
+**模型 B（burst_len>1）：ROM 单次 Burst（原有，不变）**
+- 单次二值决策，触发则查 ROM 注入一个连续 burst
+- Cluster 模式完全不受影响
+
+#### 新增寄存器（auto_scan_engine.v）
+
+| 寄存器 | 位宽 | 用途 |
+|--------|------|------|
+| `bit_scan_pos` | 7-bit | 当前扫描的 bit 位置（0=初始化，1~w_valid=评估，>w_valid=完成） |
+| `bit_scan_cw` | 64-bit | 累积翻转后的 codeword |
+| `bit_scan_flips` | 7-bit | 已翻转的 bit 数量 |
+| `threshold_per_bit` | 32-bit（wire） | `threshold_val >> 6`，per-bit 翻转概率 |
+
+#### 修改文件
+
+| 文件 | 变更 |
+|------|------|
+| `src/ctrl/auto_scan_engine.v` | v1.1→v1.2：增加 bit-scan Bernoulli 注入路径（burst_len=1）；新增 bit_scan_pos/cw/flips 寄存器；threshold_per_bit wire；INJ_WAIT 双路径分支 |
+| `docs/FPGA project high level design.md` | Section 2.3.2.2 重写为双模型描述；Section 2.3.2.3 更新为注入模型选择与阈值使用说明 |
+| `docs/bug_fix_report_2026_03_26.md` | 新增 Bug #86 记录 |
+
+**状态：** v2.2 Ready for Re-synthesis（需重新综合 FPGA bitstream，ROM 内容无需更改）
+
+---
+
+## 📝 版本修订记录 - v2.3 (2026-03-26)
+
+**主要变更：LFSR 改为仅在注入状态推进，消除解码器延迟对注入序列的影响（Bug #93）**
+
+#### 问题背景
+
+原有 `auto_scan_engine.v` 的 `inj_lfsr` 为**自由运行**模式（每个时钟周期自动推进）。由于 2NRM-RRNS Parallel（~73 cycles/trial）和 2NRM-RRNS Serial（~412 cycles/trial）的解码器延迟相差约 339 个时钟周期，每次 trial 结束后 LFSR 处于不同状态，导致下一次 trial 的 bit-scan 注入使用不同的 LFSR 序列片段，产生不同程度的错误聚类（Error Clustering），使两者 SR 曲线出现系统性差异（10% BER 时差 0.105）。
+
+#### 核心变更
+
+| 参数 | 旧值 (v2.2) | 新值 (v2.3) |
+|------|------------|------------|
+| `auto_scan_engine.v` 版本 | v1.2 | **v1.3** |
+| `inj_lfsr` 推进时机 | 每个时钟周期（自由运行） | **仅在 `ENG_STATE_INJ_WAIT` 状态下推进** |
+| 注入序列与解码器延迟的关系 | 耦合（不同延迟→不同序列） | **解耦（注入序列独立于解码器延迟）** |
+| Parallel vs Serial SR 差异 | 0.105（at 10% BER） | **预期趋于一致** |
+
+#### 修改内容
+
+```verilog
+// 修改前（自由运行）：
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) inj_lfsr <= 32'hDEADBEEF;
+    else        inj_lfsr <= inj_lfsr_next;  // 每个时钟都推进
+end
+
+// 修改后（固定注入窗口）：
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) inj_lfsr <= 32'hDEADBEEF;
+    else if (state == `ENG_STATE_INJ_WAIT)
+        inj_lfsr <= inj_lfsr_next;  // 只在注入时推进
+    // 其他状态保持冻结
+end
+```
+
+#### 修改文件
+
+| 文件 | 变更 |
+|------|------|
+| `src/ctrl/auto_scan_engine.v` | v1.2→v1.3：`inj_lfsr` 改为仅在 `ENG_STATE_INJ_WAIT` 状态推进 |
+| `docs/FPGA project high level design.md` | Section 2.3.2 LFSR 输出分配策略更新；新增 Bug #93 修复说明 |
+| `docs/bug_fix_report_2026_03_26.md` | 新增 Bug #93 记录 |
+
+**状态：** v2.3 Ready for Re-synthesis（需重新综合 FPGA bitstream）
 
 ---
 

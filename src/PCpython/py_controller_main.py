@@ -17,16 +17,24 @@ SUM_RESULT_DIR = os.path.join(RESULT_DIR, 'sum_result')  # All-in-One mode outpu
 # ================= Configuration Constants =================
 DEFAULT_PORT = 'COM8'       # Default serial port (Linux: /dev/ttyUSB0)
 DEFAULT_BAUDRATE = 921600   # Baud rate
-TIMEOUT_SEC = 300.0          # Receive timeout (seconds). FPGA may need time for large sample counts.
+TIMEOUT_SEC = 900.0          # Receive timeout (seconds). FPGA may need time for large sample counts.
 
 # Algorithm Mapping (User Specified Order)
-# 0: 2NRM, 1: 3NRM, 2: C-RRNS-MLD, 3: C-RRNS-MRC, 4: C-RRNS-CRT, 5: RS
+# 0: 2NRM, 1: 3NRM, 2: C-RRNS-MLD, 3: C-RRNS-MRC, 4: C-RRNS-CRT (DISABLED), 5: RS
+#
+# NOTE: algo_id=4 (C-RRNS-CRT) is DISABLED.
+# Standard CRT cannot be applied to the non-redundant moduli set {64, 63, 65}
+# because gcd(M_a/64, 64) = gcd(4080, 64) = 16 ≠ 1, making the CRT coefficient
+# for m0=64 non-invertible. The FPGA decoder_crrns_crt.v falls back to MRC
+# (Mixed Radix Conversion), which is identical to C-RRNS-MRC (algo_id=3).
+# Testing algo_id=4 would produce the same BER curves as algo_id=3 and add
+# no additional information. It is kept in the mapping for reference only.
 ALGO_MAP = {
     0: "2NRM-RRNS",
     1: "3NRM-RRNS",
     2: "C-RRNS-MLD",        # C-RRNS with Maximum Likelihood Decoding
-    3: "C-RRNS-MRC",        # C-RRNS with Mixed Radix Conversion (reserved)
-    4: "C-RRNS-CRT",        # C-RRNS with Chinese Remainder Theorem (reserved)
+    3: "C-RRNS-MRC",        # C-RRNS with Mixed Radix Conversion
+    # 4: "C-RRNS-CRT",      # DISABLED: CRT not applicable to {64,63,65} moduli set
     5: "RS",
     6: "2NRM-RRNS-Serial",  # 2NRM sequential FSM MLD (serial counterpart of algo_id=0)
 }
@@ -844,9 +852,11 @@ def get_all_in_one_params() -> Optional[Tuple[List[int], int]]:
     print("\n" + "="*60)
     print("Mode A: All-in-One Build — Parameter Configuration")
     print("="*60)
-    print("\nThis mode will automatically test ALL 7 algorithms for each")
+    active_count = len(ALGO_MAP)
+    print(f"\nThis mode will automatically test all {active_count} active algorithms for each")
     print("specified burst length. Results are saved to sum_result/ and")
     print("comparison plots are generated automatically upon completion.")
+    print(f"  Active algorithms: {list(ALGO_MAP.values())}")
     print()
     print("[IMPORTANT] Please confirm that the FPGA is loaded with the")
     print("            ALL_IN_ONE_BUILD bitstream (ALL_IN_ONE_BUILD defined")
@@ -923,12 +933,15 @@ def run_all_in_one_mode(controller: 'FpgaController', lengths: List[int], sample
     """
     os.makedirs(SUM_RESULT_DIR, exist_ok=True)
 
-    total_runs = len(lengths) * 7
+    # Only test algorithms present in ALGO_MAP (excludes disabled ones like C-RRNS-CRT)
+    active_algo_ids = sorted(ALGO_MAP.keys())
+    total_runs = len(lengths) * len(active_algo_ids)
     completed  = 0
     failed     = 0
     saved_csvs = []
 
     print(f"\n[All-in-One] Starting {total_runs} test runs...")
+    print(f"[All-in-One] Active algorithms: {[ALGO_MAP[k] for k in active_algo_ids]}")
     print(f"[All-in-One] Results will be saved to: {SUM_RESULT_DIR}")
 
     for burst_len in lengths:
@@ -936,7 +949,7 @@ def run_all_in_one_mode(controller: 'FpgaController', lengths: List[int], sample
         error_mode = 0 if burst_len == 1 else 1
         mode_str   = "Random Single Bit" if burst_len == 1 else f"Cluster Burst L={burst_len}"
 
-        for algo_id in range(7):
+        for algo_id in active_algo_ids:
             completed += 1
             algo_name = ALGO_MAP.get(algo_id, f"ID={algo_id}")
             print(f"\n{'='*70}")

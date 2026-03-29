@@ -427,18 +427,24 @@ module decoder_channel_2nrm_param #(
         endcase
     end
 
-    // diff_raw = rj + P_M2 - ri  (no modulo here -- just addition/subtraction)
+    // diff_raw = (rj - ri) mod P_M2
     //
-    // v2.14 BIT-WIDTH FIX: diff_raw reduced from 18-bit to 9-bit.
-    // Mathematical proof:
-    //   rj  <= P_M2 - 1 <= 255  (8-bit)
-    //   P_M2 <= 256              (9-bit)
-    //   ri  >= 0
-    //   diff_raw_max = 255 + 256 - 0 = 511 < 2^9 = 512
-    //   => bits [17:9] are always 0; only [8:0] carry valid data.
-    // With 9-bit input, Stage 1b modulo circuit uses ~1-2 CARRY4 vs 6 CARRY4 before.
+    // Bug #101 fix: ri can be up to P_M1-1 (max 256), while P_M2 can be as small
+    // as 53. When ri > P_M2, a single addition of P_M2 is insufficient to make
+    // the result positive. Example: ri=200, P_M2=53, rj=10:
+    //   10 + 53 - 200 = -137 → wraps to 887 in 10-bit unsigned (WRONG!)
+    // Fix: add enough multiples of P_M2 to ensure positive result, then take modulo.
+    // ri_max = P_M1-1 = 256, P_M2_min = 53, ceil(256/53) = 5 → add 5×P_M2.
+    // Since P_M2 is a compile-time constant, % P_M2 is optimized by Vivado.
+    //
+    // v2.14 BIT-WIDTH NOTE: diff_raw reduced to 9-bit (max = 255+5*256-0 = 1535 < 2^11).
+    // Using 11-bit intermediate to avoid overflow before modulo.
+    wire [10:0] diff_raw_wide;
+    assign diff_raw_wide = {3'b0, rj} + {2'b0, P_M2[8:0]} + {2'b0, P_M2[8:0]} +
+                           {2'b0, P_M2[8:0]} + {2'b0, P_M2[8:0]} + {2'b0, P_M2[8:0]} -
+                           {3'b0, ri};  // 11-bit: max = 255+5*256-0 = 1535 < 2^11
     wire [8:0] diff_raw;
-    assign diff_raw = rj + P_M2[8:0] - ri;  // 9-bit: max = 255+256-0 = 511 < 512
+    assign diff_raw = diff_raw_wide % P_M2;  // constant modulo, optimized by Vivado
 
     // --- Stage 1a pipeline registers ---
     // (* dont_touch = "true" *) prevents Vivado from merging this stage with
@@ -1230,28 +1236,76 @@ module decoder_channel_2nrm_param #(
     wire [8:0] cr1_4_comb = (cand_r_s2[4] + PMOD_55  >= 9'd55)  ? (cand_r_s2[4] + PMOD_55  - 9'd55)  : (cand_r_s2[4] + PMOD_55);
     wire [8:0] cr1_5_comb = (cand_r_s2[5] + PMOD_53  >= 9'd53)  ? (cand_r_s2[5] + PMOD_53  - 9'd53)  : (cand_r_s2[5] + PMOD_53);
 
-    // x values for k=0..4 (combinational, from cand_r_s2 / x_cand_16_s2)
-    wire [31:0] x_k0_raw_comb = {16'd0, x_cand_16_s2};
-    wire [31:0] x_k1_raw_comb = {16'd0, x_cand_16_s2} + PERIOD;
-    wire [31:0] x_k2_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD << 1);
-    wire [31:0] x_k3_raw_comb = {16'd0, x_cand_16_s2} + PERIOD + (PERIOD << 1);
-    wire [31:0] x_k4_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD << 2);
-    wire x_k1_valid_comb = (x_k1_raw_comb <= 32'd65535);
-    wire x_k2_valid_comb = (x_k2_raw_comb <= 32'd65535);
-    wire x_k3_valid_comb = (x_k3_raw_comb <= 32'd65535);
-    wire x_k4_valid_comb = (x_k4_raw_comb <= 32'd65535);
+    // x values for k=0..22 (combinational, from cand_r_s2 / x_cand_16_s2)
+    // Bug #102 fix: extend from k=0..4 to k=0..22 to cover all 16-bit X values
+    // for small-modulus pairs (e.g., (55,53) with PERIOD=2915 needs k up to 22).
+    // For large-modulus pairs (PERIOD >= 13568), k>4 gives X > 65535, so
+    // x_k_valid will be false and Vivado will optimize away those branches.
+    wire [31:0] x_k0_raw_comb  = {16'd0, x_cand_16_s2};
+    wire [31:0] x_k1_raw_comb  = {16'd0, x_cand_16_s2} + PERIOD;
+    wire [31:0] x_k2_raw_comb  = {16'd0, x_cand_16_s2} + (PERIOD * 2);
+    wire [31:0] x_k3_raw_comb  = {16'd0, x_cand_16_s2} + (PERIOD * 3);
+    wire [31:0] x_k4_raw_comb  = {16'd0, x_cand_16_s2} + (PERIOD * 4);
+    wire [31:0] x_k5_raw_comb  = {16'd0, x_cand_16_s2} + (PERIOD * 5);
+    wire [31:0] x_k6_raw_comb  = {16'd0, x_cand_16_s2} + (PERIOD * 6);
+    wire [31:0] x_k7_raw_comb  = {16'd0, x_cand_16_s2} + (PERIOD * 7);
+    wire [31:0] x_k8_raw_comb  = {16'd0, x_cand_16_s2} + (PERIOD * 8);
+    wire [31:0] x_k9_raw_comb  = {16'd0, x_cand_16_s2} + (PERIOD * 9);
+    wire [31:0] x_k10_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD * 10);
+    wire [31:0] x_k11_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD * 11);
+    wire [31:0] x_k12_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD * 12);
+    wire [31:0] x_k13_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD * 13);
+    wire [31:0] x_k14_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD * 14);
+    wire [31:0] x_k15_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD * 15);
+    wire [31:0] x_k16_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD * 16);
+    wire [31:0] x_k17_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD * 17);
+    wire [31:0] x_k18_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD * 18);
+    wire [31:0] x_k19_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD * 19);
+    wire [31:0] x_k20_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD * 20);
+    wire [31:0] x_k21_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD * 21);
+    wire [31:0] x_k22_raw_comb = {16'd0, x_cand_16_s2} + (PERIOD * 22);
+    wire x_k1_valid_comb  = (x_k1_raw_comb  <= 32'd65535);
+    wire x_k2_valid_comb  = (x_k2_raw_comb  <= 32'd65535);
+    wire x_k3_valid_comb  = (x_k3_raw_comb  <= 32'd65535);
+    wire x_k4_valid_comb  = (x_k4_raw_comb  <= 32'd65535);
+    wire x_k5_valid_comb  = (x_k5_raw_comb  <= 32'd65535);
+    wire x_k6_valid_comb  = (x_k6_raw_comb  <= 32'd65535);
+    wire x_k7_valid_comb  = (x_k7_raw_comb  <= 32'd65535);
+    wire x_k8_valid_comb  = (x_k8_raw_comb  <= 32'd65535);
+    wire x_k9_valid_comb  = (x_k9_raw_comb  <= 32'd65535);
+    wire x_k10_valid_comb = (x_k10_raw_comb <= 32'd65535);
+    wire x_k11_valid_comb = (x_k11_raw_comb <= 32'd65535);
+    wire x_k12_valid_comb = (x_k12_raw_comb <= 32'd65535);
+    wire x_k13_valid_comb = (x_k13_raw_comb <= 32'd65535);
+    wire x_k14_valid_comb = (x_k14_raw_comb <= 32'd65535);
+    wire x_k15_valid_comb = (x_k15_raw_comb <= 32'd65535);
+    wire x_k16_valid_comb = (x_k16_raw_comb <= 32'd65535);
+    wire x_k17_valid_comb = (x_k17_raw_comb <= 32'd65535);
+    wire x_k18_valid_comb = (x_k18_raw_comb <= 32'd65535);
+    wire x_k19_valid_comb = (x_k19_raw_comb <= 32'd65535);
+    wire x_k20_valid_comb = (x_k20_raw_comb <= 32'd65535);
+    wire x_k21_valid_comb = (x_k21_raw_comb <= 32'd65535);
+    wire x_k22_valid_comb = (x_k22_raw_comb <= 32'd65535);
 
     // Stage 3a1 pipeline registers
     // cr0_s3a1: k=0 candidate residues (= cand_r_s2, registered)
     // cr1_s3a1: k=1 candidate residues (= cr1_comb, registered)
-    // x_k0_s3a1..x_k4_s3a1: candidate x values (registered)
-    // x_k1_valid_s3a1..x_k4_valid_s3a1: validity flags (registered)
+    // x_k0_s3a1..x_k22_s3a1: candidate x values (registered)
+    // x_k1_valid_s3a1..x_k22_valid_s3a1: validity flags (registered)
     // recv_r_s3a1: received residues (forwarded from recv_r_s2, registered)
     (* dont_touch = "true" *) reg [8:0] cr0_s3a1 [0:5];  // k=0 residues
     (* dont_touch = "true" *) reg [8:0] cr1_s3a1 [0:5];  // k=1 residues
-    (* dont_touch = "true" *) reg [15:0] x_k0_s3a1, x_k1_s3a1, x_k2_s3a1, x_k3_s3a1, x_k4_s3a1;
-    (* dont_touch = "true" *) reg        x_k1_valid_s3a1, x_k2_valid_s3a1;
-    (* dont_touch = "true" *) reg        x_k3_valid_s3a1, x_k4_valid_s3a1;
+    (* dont_touch = "true" *) reg [15:0] x_k0_s3a1,  x_k1_s3a1,  x_k2_s3a1,  x_k3_s3a1,  x_k4_s3a1;
+    (* dont_touch = "true" *) reg [15:0] x_k5_s3a1,  x_k6_s3a1,  x_k7_s3a1,  x_k8_s3a1,  x_k9_s3a1;
+    (* dont_touch = "true" *) reg [15:0] x_k10_s3a1, x_k11_s3a1, x_k12_s3a1, x_k13_s3a1, x_k14_s3a1;
+    (* dont_touch = "true" *) reg [15:0] x_k15_s3a1, x_k16_s3a1, x_k17_s3a1, x_k18_s3a1, x_k19_s3a1;
+    (* dont_touch = "true" *) reg [15:0] x_k20_s3a1, x_k21_s3a1, x_k22_s3a1;
+    (* dont_touch = "true" *) reg        x_k1_valid_s3a1,  x_k2_valid_s3a1,  x_k3_valid_s3a1,  x_k4_valid_s3a1;
+    (* dont_touch = "true" *) reg        x_k5_valid_s3a1,  x_k6_valid_s3a1,  x_k7_valid_s3a1,  x_k8_valid_s3a1;
+    (* dont_touch = "true" *) reg        x_k9_valid_s3a1,  x_k10_valid_s3a1, x_k11_valid_s3a1, x_k12_valid_s3a1;
+    (* dont_touch = "true" *) reg        x_k13_valid_s3a1, x_k14_valid_s3a1, x_k15_valid_s3a1, x_k16_valid_s3a1;
+    (* dont_touch = "true" *) reg        x_k17_valid_s3a1, x_k18_valid_s3a1, x_k19_valid_s3a1, x_k20_valid_s3a1;
+    (* dont_touch = "true" *) reg        x_k21_valid_s3a1, x_k22_valid_s3a1;
     (* dont_touch = "true" *) reg [8:0]  recv_r_s3a1 [0:5];
     (* dont_touch = "true" *) reg        valid_s3a1;
 
@@ -1261,10 +1315,25 @@ module decoder_channel_2nrm_param #(
             cr0_s3a1[3] <= 9'd0; cr0_s3a1[4] <= 9'd0; cr0_s3a1[5] <= 9'd0;
             cr1_s3a1[0] <= 9'd0; cr1_s3a1[1] <= 9'd0; cr1_s3a1[2] <= 9'd0;
             cr1_s3a1[3] <= 9'd0; cr1_s3a1[4] <= 9'd0; cr1_s3a1[5] <= 9'd0;
-            x_k0_s3a1 <= 16'd0; x_k1_s3a1 <= 16'd0; x_k2_s3a1 <= 16'd0;
-            x_k3_s3a1 <= 16'd0; x_k4_s3a1 <= 16'd0;
-            x_k1_valid_s3a1 <= 1'b0; x_k2_valid_s3a1 <= 1'b0;
-            x_k3_valid_s3a1 <= 1'b0; x_k4_valid_s3a1 <= 1'b0;
+            x_k0_s3a1  <= 16'd0; x_k1_s3a1  <= 16'd0; x_k2_s3a1  <= 16'd0;
+            x_k3_s3a1  <= 16'd0; x_k4_s3a1  <= 16'd0; x_k5_s3a1  <= 16'd0;
+            x_k6_s3a1  <= 16'd0; x_k7_s3a1  <= 16'd0; x_k8_s3a1  <= 16'd0;
+            x_k9_s3a1  <= 16'd0; x_k10_s3a1 <= 16'd0; x_k11_s3a1 <= 16'd0;
+            x_k12_s3a1 <= 16'd0; x_k13_s3a1 <= 16'd0; x_k14_s3a1 <= 16'd0;
+            x_k15_s3a1 <= 16'd0; x_k16_s3a1 <= 16'd0; x_k17_s3a1 <= 16'd0;
+            x_k18_s3a1 <= 16'd0; x_k19_s3a1 <= 16'd0; x_k20_s3a1 <= 16'd0;
+            x_k21_s3a1 <= 16'd0; x_k22_s3a1 <= 16'd0;
+            x_k1_valid_s3a1  <= 1'b0; x_k2_valid_s3a1  <= 1'b0;
+            x_k3_valid_s3a1  <= 1'b0; x_k4_valid_s3a1  <= 1'b0;
+            x_k5_valid_s3a1  <= 1'b0; x_k6_valid_s3a1  <= 1'b0;
+            x_k7_valid_s3a1  <= 1'b0; x_k8_valid_s3a1  <= 1'b0;
+            x_k9_valid_s3a1  <= 1'b0; x_k10_valid_s3a1 <= 1'b0;
+            x_k11_valid_s3a1 <= 1'b0; x_k12_valid_s3a1 <= 1'b0;
+            x_k13_valid_s3a1 <= 1'b0; x_k14_valid_s3a1 <= 1'b0;
+            x_k15_valid_s3a1 <= 1'b0; x_k16_valid_s3a1 <= 1'b0;
+            x_k17_valid_s3a1 <= 1'b0; x_k18_valid_s3a1 <= 1'b0;
+            x_k19_valid_s3a1 <= 1'b0; x_k20_valid_s3a1 <= 1'b0;
+            x_k21_valid_s3a1 <= 1'b0; x_k22_valid_s3a1 <= 1'b0;
             recv_r_s3a1[0] <= 9'd0; recv_r_s3a1[1] <= 9'd0; recv_r_s3a1[2] <= 9'd0;
             recv_r_s3a1[3] <= 9'd0; recv_r_s3a1[4] <= 9'd0; recv_r_s3a1[5] <= 9'd0;
             valid_s3a1 <= 1'b0;
@@ -1277,16 +1346,41 @@ module decoder_channel_2nrm_param #(
             cr1_s3a1[0] <= cr1_0_comb; cr1_s3a1[1] <= cr1_1_comb;
             cr1_s3a1[2] <= cr1_2_comb; cr1_s3a1[3] <= cr1_3_comb;
             cr1_s3a1[4] <= cr1_4_comb; cr1_s3a1[5] <= cr1_5_comb;
-            // Register x values (combinational from x_cand_16_s2)
-            x_k0_s3a1 <= x_k0_raw_comb[15:0];
-            x_k1_s3a1 <= x_k1_valid_comb ? x_k1_raw_comb[15:0] : 16'd0;
-            x_k2_s3a1 <= x_k2_valid_comb ? x_k2_raw_comb[15:0] : 16'd0;
-            x_k3_s3a1 <= x_k3_valid_comb ? x_k3_raw_comb[15:0] : 16'd0;
-            x_k4_s3a1 <= x_k4_valid_comb ? x_k4_raw_comb[15:0] : 16'd0;
-            x_k1_valid_s3a1 <= x_k1_valid_comb;
-            x_k2_valid_s3a1 <= x_k2_valid_comb;
-            x_k3_valid_s3a1 <= x_k3_valid_comb;
-            x_k4_valid_s3a1 <= x_k4_valid_comb;
+            // Register x values k=0..22 (combinational from x_cand_16_s2)
+            x_k0_s3a1  <= x_k0_raw_comb[15:0];
+            x_k1_s3a1  <= x_k1_valid_comb  ? x_k1_raw_comb[15:0]  : 16'd0;
+            x_k2_s3a1  <= x_k2_valid_comb  ? x_k2_raw_comb[15:0]  : 16'd0;
+            x_k3_s3a1  <= x_k3_valid_comb  ? x_k3_raw_comb[15:0]  : 16'd0;
+            x_k4_s3a1  <= x_k4_valid_comb  ? x_k4_raw_comb[15:0]  : 16'd0;
+            x_k5_s3a1  <= x_k5_valid_comb  ? x_k5_raw_comb[15:0]  : 16'd0;
+            x_k6_s3a1  <= x_k6_valid_comb  ? x_k6_raw_comb[15:0]  : 16'd0;
+            x_k7_s3a1  <= x_k7_valid_comb  ? x_k7_raw_comb[15:0]  : 16'd0;
+            x_k8_s3a1  <= x_k8_valid_comb  ? x_k8_raw_comb[15:0]  : 16'd0;
+            x_k9_s3a1  <= x_k9_valid_comb  ? x_k9_raw_comb[15:0]  : 16'd0;
+            x_k10_s3a1 <= x_k10_valid_comb ? x_k10_raw_comb[15:0] : 16'd0;
+            x_k11_s3a1 <= x_k11_valid_comb ? x_k11_raw_comb[15:0] : 16'd0;
+            x_k12_s3a1 <= x_k12_valid_comb ? x_k12_raw_comb[15:0] : 16'd0;
+            x_k13_s3a1 <= x_k13_valid_comb ? x_k13_raw_comb[15:0] : 16'd0;
+            x_k14_s3a1 <= x_k14_valid_comb ? x_k14_raw_comb[15:0] : 16'd0;
+            x_k15_s3a1 <= x_k15_valid_comb ? x_k15_raw_comb[15:0] : 16'd0;
+            x_k16_s3a1 <= x_k16_valid_comb ? x_k16_raw_comb[15:0] : 16'd0;
+            x_k17_s3a1 <= x_k17_valid_comb ? x_k17_raw_comb[15:0] : 16'd0;
+            x_k18_s3a1 <= x_k18_valid_comb ? x_k18_raw_comb[15:0] : 16'd0;
+            x_k19_s3a1 <= x_k19_valid_comb ? x_k19_raw_comb[15:0] : 16'd0;
+            x_k20_s3a1 <= x_k20_valid_comb ? x_k20_raw_comb[15:0] : 16'd0;
+            x_k21_s3a1 <= x_k21_valid_comb ? x_k21_raw_comb[15:0] : 16'd0;
+            x_k22_s3a1 <= x_k22_valid_comb ? x_k22_raw_comb[15:0] : 16'd0;
+            x_k1_valid_s3a1  <= x_k1_valid_comb;  x_k2_valid_s3a1  <= x_k2_valid_comb;
+            x_k3_valid_s3a1  <= x_k3_valid_comb;  x_k4_valid_s3a1  <= x_k4_valid_comb;
+            x_k5_valid_s3a1  <= x_k5_valid_comb;  x_k6_valid_s3a1  <= x_k6_valid_comb;
+            x_k7_valid_s3a1  <= x_k7_valid_comb;  x_k8_valid_s3a1  <= x_k8_valid_comb;
+            x_k9_valid_s3a1  <= x_k9_valid_comb;  x_k10_valid_s3a1 <= x_k10_valid_comb;
+            x_k11_valid_s3a1 <= x_k11_valid_comb; x_k12_valid_s3a1 <= x_k12_valid_comb;
+            x_k13_valid_s3a1 <= x_k13_valid_comb; x_k14_valid_s3a1 <= x_k14_valid_comb;
+            x_k15_valid_s3a1 <= x_k15_valid_comb; x_k16_valid_s3a1 <= x_k16_valid_comb;
+            x_k17_valid_s3a1 <= x_k17_valid_comb; x_k18_valid_s3a1 <= x_k18_valid_comb;
+            x_k19_valid_s3a1 <= x_k19_valid_comb; x_k20_valid_s3a1 <= x_k20_valid_comb;
+            x_k21_valid_s3a1 <= x_k21_valid_comb; x_k22_valid_s3a1 <= x_k22_valid_comb;
             // Forward received residues (for distance calculation in Stage 3a2)
             recv_r_s3a1[0] <= recv_r_s2[0]; recv_r_s3a1[1] <= recv_r_s2[1];
             recv_r_s3a1[2] <= recv_r_s2[2]; recv_r_s3a1[3] <= recv_r_s2[3];
@@ -1317,14 +1411,23 @@ module decoder_channel_2nrm_param #(
     wire [8:0] cr2_5_comb = (cr1_s3a1[5] + PMOD_53  >= 9'd53)  ? (cr1_s3a1[5] + PMOD_53  - 9'd53)  : (cr1_s3a1[5] + PMOD_53);
 
     // Stage 3a2 pipeline registers: register cr2 only
-    // Also forward cr0_s3a1, cr1_s3a1, x values, valid flags, recv_r to Stage 3a3
+    // Also forward cr0_s3a1, cr1_s3a1, x values k=0..22, valid flags, recv_r to Stage 3a3
     (* dont_touch = "true" *) reg [8:0] cr2_s3a2 [0:5];  // k=2 residues (registered)
     // Forward cr0/cr1 from Stage 3a1 (need 1 more cycle alignment)
     (* dont_touch = "true" *) reg [8:0] cr0_s3a2 [0:5];  // k=0 residues (forwarded)
     (* dont_touch = "true" *) reg [8:0] cr1_s3a2 [0:5];  // k=1 residues (forwarded)
-    (* dont_touch = "true" *) reg [15:0] x_k0_s3a2, x_k1_s3a2, x_k2_s3a2, x_k3_s3a2, x_k4_s3a2;
-    (* dont_touch = "true" *) reg        x_k1_valid_s3a2, x_k2_valid_s3a2;
-    (* dont_touch = "true" *) reg        x_k3_valid_s3a2, x_k4_valid_s3a2;
+    // Bug #102: forward k=0..22 x values and valid flags
+    (* dont_touch = "true" *) reg [15:0] x_k0_s3a2,  x_k1_s3a2,  x_k2_s3a2,  x_k3_s3a2,  x_k4_s3a2;
+    (* dont_touch = "true" *) reg [15:0] x_k5_s3a2,  x_k6_s3a2,  x_k7_s3a2,  x_k8_s3a2,  x_k9_s3a2;
+    (* dont_touch = "true" *) reg [15:0] x_k10_s3a2, x_k11_s3a2, x_k12_s3a2, x_k13_s3a2, x_k14_s3a2;
+    (* dont_touch = "true" *) reg [15:0] x_k15_s3a2, x_k16_s3a2, x_k17_s3a2, x_k18_s3a2, x_k19_s3a2;
+    (* dont_touch = "true" *) reg [15:0] x_k20_s3a2, x_k21_s3a2, x_k22_s3a2;
+    (* dont_touch = "true" *) reg        x_k1_valid_s3a2,  x_k2_valid_s3a2,  x_k3_valid_s3a2,  x_k4_valid_s3a2;
+    (* dont_touch = "true" *) reg        x_k5_valid_s3a2,  x_k6_valid_s3a2,  x_k7_valid_s3a2,  x_k8_valid_s3a2;
+    (* dont_touch = "true" *) reg        x_k9_valid_s3a2,  x_k10_valid_s3a2, x_k11_valid_s3a2, x_k12_valid_s3a2;
+    (* dont_touch = "true" *) reg        x_k13_valid_s3a2, x_k14_valid_s3a2, x_k15_valid_s3a2, x_k16_valid_s3a2;
+    (* dont_touch = "true" *) reg        x_k17_valid_s3a2, x_k18_valid_s3a2, x_k19_valid_s3a2, x_k20_valid_s3a2;
+    (* dont_touch = "true" *) reg        x_k21_valid_s3a2, x_k22_valid_s3a2;
     (* dont_touch = "true" *) reg [8:0]  recv_r_s3a2 [0:5];
     (* dont_touch = "true" *) reg        valid_s3a2;
 
@@ -1336,10 +1439,25 @@ module decoder_channel_2nrm_param #(
             cr0_s3a2[3] <= 9'd0; cr0_s3a2[4] <= 9'd0; cr0_s3a2[5] <= 9'd0;
             cr1_s3a2[0] <= 9'd0; cr1_s3a2[1] <= 9'd0; cr1_s3a2[2] <= 9'd0;
             cr1_s3a2[3] <= 9'd0; cr1_s3a2[4] <= 9'd0; cr1_s3a2[5] <= 9'd0;
-            x_k0_s3a2 <= 16'd0; x_k1_s3a2 <= 16'd0; x_k2_s3a2 <= 16'd0;
-            x_k3_s3a2 <= 16'd0; x_k4_s3a2 <= 16'd0;
-            x_k1_valid_s3a2 <= 1'b0; x_k2_valid_s3a2 <= 1'b0;
-            x_k3_valid_s3a2 <= 1'b0; x_k4_valid_s3a2 <= 1'b0;
+            x_k0_s3a2  <= 16'd0; x_k1_s3a2  <= 16'd0; x_k2_s3a2  <= 16'd0;
+            x_k3_s3a2  <= 16'd0; x_k4_s3a2  <= 16'd0; x_k5_s3a2  <= 16'd0;
+            x_k6_s3a2  <= 16'd0; x_k7_s3a2  <= 16'd0; x_k8_s3a2  <= 16'd0;
+            x_k9_s3a2  <= 16'd0; x_k10_s3a2 <= 16'd0; x_k11_s3a2 <= 16'd0;
+            x_k12_s3a2 <= 16'd0; x_k13_s3a2 <= 16'd0; x_k14_s3a2 <= 16'd0;
+            x_k15_s3a2 <= 16'd0; x_k16_s3a2 <= 16'd0; x_k17_s3a2 <= 16'd0;
+            x_k18_s3a2 <= 16'd0; x_k19_s3a2 <= 16'd0; x_k20_s3a2 <= 16'd0;
+            x_k21_s3a2 <= 16'd0; x_k22_s3a2 <= 16'd0;
+            x_k1_valid_s3a2  <= 1'b0; x_k2_valid_s3a2  <= 1'b0;
+            x_k3_valid_s3a2  <= 1'b0; x_k4_valid_s3a2  <= 1'b0;
+            x_k5_valid_s3a2  <= 1'b0; x_k6_valid_s3a2  <= 1'b0;
+            x_k7_valid_s3a2  <= 1'b0; x_k8_valid_s3a2  <= 1'b0;
+            x_k9_valid_s3a2  <= 1'b0; x_k10_valid_s3a2 <= 1'b0;
+            x_k11_valid_s3a2 <= 1'b0; x_k12_valid_s3a2 <= 1'b0;
+            x_k13_valid_s3a2 <= 1'b0; x_k14_valid_s3a2 <= 1'b0;
+            x_k15_valid_s3a2 <= 1'b0; x_k16_valid_s3a2 <= 1'b0;
+            x_k17_valid_s3a2 <= 1'b0; x_k18_valid_s3a2 <= 1'b0;
+            x_k19_valid_s3a2 <= 1'b0; x_k20_valid_s3a2 <= 1'b0;
+            x_k21_valid_s3a2 <= 1'b0; x_k22_valid_s3a2 <= 1'b0;
             recv_r_s3a2[0] <= 9'd0; recv_r_s3a2[1] <= 9'd0; recv_r_s3a2[2] <= 9'd0;
             recv_r_s3a2[3] <= 9'd0; recv_r_s3a2[4] <= 9'd0; recv_r_s3a2[5] <= 9'd0;
             valid_s3a2 <= 1'b0;
@@ -1355,11 +1473,26 @@ module decoder_channel_2nrm_param #(
             cr1_s3a2[0] <= cr1_s3a1[0]; cr1_s3a2[1] <= cr1_s3a1[1];
             cr1_s3a2[2] <= cr1_s3a1[2]; cr1_s3a2[3] <= cr1_s3a1[3];
             cr1_s3a2[4] <= cr1_s3a1[4]; cr1_s3a2[5] <= cr1_s3a1[5];
-            // Forward x values and validity flags
-            x_k0_s3a2 <= x_k0_s3a1; x_k1_s3a2 <= x_k1_s3a1;
-            x_k2_s3a2 <= x_k2_s3a1; x_k3_s3a2 <= x_k3_s3a1; x_k4_s3a2 <= x_k4_s3a1;
-            x_k1_valid_s3a2 <= x_k1_valid_s3a1; x_k2_valid_s3a2 <= x_k2_valid_s3a1;
-            x_k3_valid_s3a2 <= x_k3_valid_s3a1; x_k4_valid_s3a2 <= x_k4_valid_s3a1;
+            // Forward x values k=0..22 and validity flags
+            x_k0_s3a2  <= x_k0_s3a1;  x_k1_s3a2  <= x_k1_s3a1;
+            x_k2_s3a2  <= x_k2_s3a1;  x_k3_s3a2  <= x_k3_s3a1;  x_k4_s3a2  <= x_k4_s3a1;
+            x_k5_s3a2  <= x_k5_s3a1;  x_k6_s3a2  <= x_k6_s3a1;  x_k7_s3a2  <= x_k7_s3a1;
+            x_k8_s3a2  <= x_k8_s3a1;  x_k9_s3a2  <= x_k9_s3a1;  x_k10_s3a2 <= x_k10_s3a1;
+            x_k11_s3a2 <= x_k11_s3a1; x_k12_s3a2 <= x_k12_s3a1; x_k13_s3a2 <= x_k13_s3a1;
+            x_k14_s3a2 <= x_k14_s3a1; x_k15_s3a2 <= x_k15_s3a1; x_k16_s3a2 <= x_k16_s3a1;
+            x_k17_s3a2 <= x_k17_s3a1; x_k18_s3a2 <= x_k18_s3a1; x_k19_s3a2 <= x_k19_s3a1;
+            x_k20_s3a2 <= x_k20_s3a1; x_k21_s3a2 <= x_k21_s3a1; x_k22_s3a2 <= x_k22_s3a1;
+            x_k1_valid_s3a2  <= x_k1_valid_s3a1;  x_k2_valid_s3a2  <= x_k2_valid_s3a1;
+            x_k3_valid_s3a2  <= x_k3_valid_s3a1;  x_k4_valid_s3a2  <= x_k4_valid_s3a1;
+            x_k5_valid_s3a2  <= x_k5_valid_s3a1;  x_k6_valid_s3a2  <= x_k6_valid_s3a1;
+            x_k7_valid_s3a2  <= x_k7_valid_s3a1;  x_k8_valid_s3a2  <= x_k8_valid_s3a1;
+            x_k9_valid_s3a2  <= x_k9_valid_s3a1;  x_k10_valid_s3a2 <= x_k10_valid_s3a1;
+            x_k11_valid_s3a2 <= x_k11_valid_s3a1; x_k12_valid_s3a2 <= x_k12_valid_s3a1;
+            x_k13_valid_s3a2 <= x_k13_valid_s3a1; x_k14_valid_s3a2 <= x_k14_valid_s3a1;
+            x_k15_valid_s3a2 <= x_k15_valid_s3a1; x_k16_valid_s3a2 <= x_k16_valid_s3a1;
+            x_k17_valid_s3a2 <= x_k17_valid_s3a1; x_k18_valid_s3a2 <= x_k18_valid_s3a1;
+            x_k19_valid_s3a2 <= x_k19_valid_s3a1; x_k20_valid_s3a2 <= x_k20_valid_s3a1;
+            x_k21_valid_s3a2 <= x_k21_valid_s3a1; x_k22_valid_s3a2 <= x_k22_valid_s3a1;
             // Forward received residues
             recv_r_s3a2[0] <= recv_r_s3a1[0]; recv_r_s3a2[1] <= recv_r_s3a1[1];
             recv_r_s3a2[2] <= recv_r_s3a1[2]; recv_r_s3a2[3] <= recv_r_s3a1[3];
@@ -1426,56 +1559,174 @@ module decoder_channel_2nrm_param #(
                               `DIST_CALC(cr4_0, cr4_1, cr4_2, cr4_3, cr4_4, cr4_5) : 4'd6;
 
     // --- Stage 3a3 output registers (= old Stage 3a output) ---
-    // Register all 5 candidate distances and x values.
+    // Register all 5 candidate distances (k=0..4) and x values.
     (* dont_touch = "true" *) reg [3:0]  dist_k0_s3a, dist_k1_s3a, dist_k2_s3a, dist_k3_s3a, dist_k4_s3a;
     (* dont_touch = "true" *) reg [15:0] x_k0_s3a, x_k1_s3a, x_k2_s3a, x_k3_s3a, x_k4_s3a;
+    // Bug #102: also forward k=5..22 x values for Stage 3b extended MLD
+    (* dont_touch = "true" *) reg [15:0] x_k5_s3a,  x_k6_s3a,  x_k7_s3a,  x_k8_s3a,  x_k9_s3a;
+    (* dont_touch = "true" *) reg [15:0] x_k10_s3a, x_k11_s3a, x_k12_s3a, x_k13_s3a, x_k14_s3a;
+    (* dont_touch = "true" *) reg [15:0] x_k15_s3a, x_k16_s3a, x_k17_s3a, x_k18_s3a, x_k19_s3a;
+    (* dont_touch = "true" *) reg [15:0] x_k20_s3a, x_k21_s3a, x_k22_s3a;
     (* dont_touch = "true" *) reg        valid_s3a;
+
+    // Bug #102: compute k=5..22 residues directly from cr0_s3a2 using compile-time constants
+    // cr_k[m] = (cr0[m] + k*PMOD_m) % m  -- no chaining needed, all parallel
+    // Helper function: (a + C) % M where C and M are compile-time constants
+    // Using conditional subtraction: result = (a + C >= M) ? (a + C - M) : (a + C)
+    // Note: C = k*PMOD_m may be >= M, so we use modulo arithmetic
+    // For timing safety, each k uses a single addition + conditional subtraction (~2ns)
+
+    // Pre-compute k*PMOD for each k and modulus (compile-time constants)
+    // These are used to compute cr_k directly from cr0 without chaining
+    `define CR_K(cr0_val, k_pmod, modulus) \
+        (({1'b0, cr0_val} + (k_pmod % modulus)) >= modulus) ? \
+        ({1'b0, cr0_val} + (k_pmod % modulus) - modulus) : \
+        ({1'b0, cr0_val} + (k_pmod % modulus))
+
+    // k=5..22 distances computed from cr0_s3a2 (registered, ~3ns each)
+    wire [3:0] dist_k5_comb  = x_k5_valid_s3a2  ? `DIST_CALC(`CR_K(cr0_s3a2[0],5*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],5*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],5*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],5*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],5*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],5*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k6_comb  = x_k6_valid_s3a2  ? `DIST_CALC(`CR_K(cr0_s3a2[0],6*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],6*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],6*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],6*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],6*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],6*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k7_comb  = x_k7_valid_s3a2  ? `DIST_CALC(`CR_K(cr0_s3a2[0],7*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],7*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],7*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],7*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],7*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],7*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k8_comb  = x_k8_valid_s3a2  ? `DIST_CALC(`CR_K(cr0_s3a2[0],8*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],8*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],8*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],8*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],8*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],8*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k9_comb  = x_k9_valid_s3a2  ? `DIST_CALC(`CR_K(cr0_s3a2[0],9*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],9*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],9*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],9*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],9*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],9*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k10_comb = x_k10_valid_s3a2 ? `DIST_CALC(`CR_K(cr0_s3a2[0],10*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],10*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],10*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],10*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],10*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],10*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k11_comb = x_k11_valid_s3a2 ? `DIST_CALC(`CR_K(cr0_s3a2[0],11*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],11*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],11*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],11*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],11*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],11*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k12_comb = x_k12_valid_s3a2 ? `DIST_CALC(`CR_K(cr0_s3a2[0],12*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],12*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],12*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],12*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],12*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],12*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k13_comb = x_k13_valid_s3a2 ? `DIST_CALC(`CR_K(cr0_s3a2[0],13*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],13*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],13*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],13*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],13*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],13*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k14_comb = x_k14_valid_s3a2 ? `DIST_CALC(`CR_K(cr0_s3a2[0],14*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],14*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],14*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],14*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],14*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],14*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k15_comb = x_k15_valid_s3a2 ? `DIST_CALC(`CR_K(cr0_s3a2[0],15*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],15*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],15*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],15*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],15*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],15*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k16_comb = x_k16_valid_s3a2 ? `DIST_CALC(`CR_K(cr0_s3a2[0],16*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],16*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],16*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],16*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],16*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],16*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k17_comb = x_k17_valid_s3a2 ? `DIST_CALC(`CR_K(cr0_s3a2[0],17*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],17*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],17*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],17*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],17*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],17*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k18_comb = x_k18_valid_s3a2 ? `DIST_CALC(`CR_K(cr0_s3a2[0],18*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],18*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],18*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],18*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],18*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],18*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k19_comb = x_k19_valid_s3a2 ? `DIST_CALC(`CR_K(cr0_s3a2[0],19*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],19*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],19*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],19*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],19*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],19*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k20_comb = x_k20_valid_s3a2 ? `DIST_CALC(`CR_K(cr0_s3a2[0],20*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],20*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],20*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],20*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],20*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],20*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k21_comb = x_k21_valid_s3a2 ? `DIST_CALC(`CR_K(cr0_s3a2[0],21*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],21*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],21*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],21*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],21*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],21*PMOD_53,9'd53)) : 4'd6;
+    wire [3:0] dist_k22_comb = x_k22_valid_s3a2 ? `DIST_CALC(`CR_K(cr0_s3a2[0],22*PMOD_257,9'd257),`CR_K(cr0_s3a2[1],22*PMOD_256,9'd256),`CR_K(cr0_s3a2[2],22*PMOD_61,9'd61),`CR_K(cr0_s3a2[3],22*PMOD_59,9'd59),`CR_K(cr0_s3a2[4],22*PMOD_55,9'd55),`CR_K(cr0_s3a2[5],22*PMOD_53,9'd53)) : 4'd6;
+
+    // Stage 3a3 output registers: k=0..4 distances + k=5..22 distances + all x values
+    (* dont_touch = "true" *) reg [3:0]  dist_k5_s3a,  dist_k6_s3a,  dist_k7_s3a,  dist_k8_s3a,  dist_k9_s3a;
+    (* dont_touch = "true" *) reg [3:0]  dist_k10_s3a, dist_k11_s3a, dist_k12_s3a, dist_k13_s3a, dist_k14_s3a;
+    (* dont_touch = "true" *) reg [3:0]  dist_k15_s3a, dist_k16_s3a, dist_k17_s3a, dist_k18_s3a, dist_k19_s3a;
+    (* dont_touch = "true" *) reg [3:0]  dist_k20_s3a, dist_k21_s3a, dist_k22_s3a;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             dist_k0_s3a <= 4'd6; dist_k1_s3a <= 4'd6;
             dist_k2_s3a <= 4'd6; dist_k3_s3a <= 4'd6; dist_k4_s3a <= 4'd6;
-            x_k0_s3a    <= 16'd0; x_k1_s3a <= 16'd0;
-            x_k2_s3a    <= 16'd0; x_k3_s3a <= 16'd0; x_k4_s3a <= 16'd0;
+            dist_k5_s3a  <= 4'd6; dist_k6_s3a  <= 4'd6; dist_k7_s3a  <= 4'd6;
+            dist_k8_s3a  <= 4'd6; dist_k9_s3a  <= 4'd6; dist_k10_s3a <= 4'd6;
+            dist_k11_s3a <= 4'd6; dist_k12_s3a <= 4'd6; dist_k13_s3a <= 4'd6;
+            dist_k14_s3a <= 4'd6; dist_k15_s3a <= 4'd6; dist_k16_s3a <= 4'd6;
+            dist_k17_s3a <= 4'd6; dist_k18_s3a <= 4'd6; dist_k19_s3a <= 4'd6;
+            dist_k20_s3a <= 4'd6; dist_k21_s3a <= 4'd6; dist_k22_s3a <= 4'd6;
+            x_k0_s3a  <= 16'd0; x_k1_s3a  <= 16'd0; x_k2_s3a  <= 16'd0;
+            x_k3_s3a  <= 16'd0; x_k4_s3a  <= 16'd0; x_k5_s3a  <= 16'd0;
+            x_k6_s3a  <= 16'd0; x_k7_s3a  <= 16'd0; x_k8_s3a  <= 16'd0;
+            x_k9_s3a  <= 16'd0; x_k10_s3a <= 16'd0; x_k11_s3a <= 16'd0;
+            x_k12_s3a <= 16'd0; x_k13_s3a <= 16'd0; x_k14_s3a <= 16'd0;
+            x_k15_s3a <= 16'd0; x_k16_s3a <= 16'd0; x_k17_s3a <= 16'd0;
+            x_k18_s3a <= 16'd0; x_k19_s3a <= 16'd0; x_k20_s3a <= 16'd0;
+            x_k21_s3a <= 16'd0; x_k22_s3a <= 16'd0;
             valid_s3a   <= 1'b0;
         end else begin
-            // All distances computed from registered cr values:
-            // dist_k0/k1/k2: from registered cr0/cr1/cr2_s3a2 (~3ns each)
-            // dist_k3: from cr3 (2ns chain from cr2_s3a2) ~5ns
-            // dist_k4: from cr4 (4ns chain from cr2_s3a2) ~7ns -- within budget!
             dist_k0_s3a <= dist_k0_comb;
             dist_k1_s3a <= dist_k1_comb;
             dist_k2_s3a <= dist_k2_comb;
             dist_k3_s3a <= dist_k3_comb;
             dist_k4_s3a <= dist_k4_comb;
-            x_k0_s3a    <= x_k0_s3a2;   // forwarded from Stage 3a2
-            x_k1_s3a    <= x_k1_s3a2;   // forwarded from Stage 3a2
-            x_k2_s3a    <= x_k2_s3a2;   // forwarded from Stage 3a2
-            x_k3_s3a    <= x_k3_s3a2;   // forwarded from Stage 3a2
-            x_k4_s3a    <= x_k4_s3a2;   // forwarded from Stage 3a2
-            valid_s3a   <= valid_s3a2;   // forwarded from Stage 3a2
+            // Bug #102: register k=5..22 distances
+            dist_k5_s3a  <= dist_k5_comb;  dist_k6_s3a  <= dist_k6_comb;
+            dist_k7_s3a  <= dist_k7_comb;  dist_k8_s3a  <= dist_k8_comb;
+            dist_k9_s3a  <= dist_k9_comb;  dist_k10_s3a <= dist_k10_comb;
+            dist_k11_s3a <= dist_k11_comb; dist_k12_s3a <= dist_k12_comb;
+            dist_k13_s3a <= dist_k13_comb; dist_k14_s3a <= dist_k14_comb;
+            dist_k15_s3a <= dist_k15_comb; dist_k16_s3a <= dist_k16_comb;
+            dist_k17_s3a <= dist_k17_comb; dist_k18_s3a <= dist_k18_comb;
+            dist_k19_s3a <= dist_k19_comb; dist_k20_s3a <= dist_k20_comb;
+            dist_k21_s3a <= dist_k21_comb; dist_k22_s3a <= dist_k22_comb;
+            x_k0_s3a  <= x_k0_s3a2;  x_k1_s3a  <= x_k1_s3a2;
+            x_k2_s3a  <= x_k2_s3a2;  x_k3_s3a  <= x_k3_s3a2;  x_k4_s3a  <= x_k4_s3a2;
+            x_k5_s3a  <= x_k5_s3a2;  x_k6_s3a  <= x_k6_s3a2;  x_k7_s3a  <= x_k7_s3a2;
+            x_k8_s3a  <= x_k8_s3a2;  x_k9_s3a  <= x_k9_s3a2;  x_k10_s3a <= x_k10_s3a2;
+            x_k11_s3a <= x_k11_s3a2; x_k12_s3a <= x_k12_s3a2; x_k13_s3a <= x_k13_s3a2;
+            x_k14_s3a <= x_k14_s3a2; x_k15_s3a <= x_k15_s3a2; x_k16_s3a <= x_k16_s3a2;
+            x_k17_s3a <= x_k17_s3a2; x_k18_s3a <= x_k18_s3a2; x_k19_s3a <= x_k19_s3a2;
+            x_k20_s3a <= x_k20_s3a2; x_k21_s3a <= x_k21_s3a2; x_k22_s3a <= x_k22_s3a2;
+            valid_s3a   <= valid_s3a2;
         end
     end
 
+    `undef CR_K
+
     // =========================================================================
-    // STAGE 3b: Minimum Distance Selection (v2.17)
+    // STAGE 3b: Minimum Distance Selection (Bug #102 extended to k=0..22)
     //
-    // Inputs are the registered Stage 3a outputs (dist_k0_s3a..dist_k4_s3a,
-    // x_k0_s3a..x_k4_s3a). The selection logic is a simple 4-level mux tree
-    // with ~2ns logic delay — well within the 10ns clock budget.
-    //
-    // Priority: k=0 > k=1 > k=2 > k=3 > k=4 (lower k wins on tie).
+    // Find minimum distance across all 23 candidates (k=0..22).
+    // Uses a balanced binary tree to avoid long combinational chains.
+    // Priority: lower k wins on tie.
     // =========================================================================
 
-    // Stage 3b: Combinational minimum selection from registered candidates
-    wire [3:0]  best_dist_01   = (dist_k1_s3a < dist_k0_s3a) ? dist_k1_s3a : dist_k0_s3a;
-    wire [15:0] best_x_01      = (dist_k1_s3a < dist_k0_s3a) ? x_k1_s3a    : x_k0_s3a;
-    wire [3:0]  best_dist_23   = (dist_k3_s3a < dist_k2_s3a) ? dist_k3_s3a : dist_k2_s3a;
-    wire [15:0] best_x_23      = (dist_k3_s3a < dist_k2_s3a) ? x_k3_s3a    : x_k2_s3a;
-    wire [3:0]  best_dist_0123 = (best_dist_23 < best_dist_01) ? best_dist_23 : best_dist_01;
-    wire [15:0] best_x_0123    = (best_dist_23 < best_dist_01) ? best_x_23    : best_x_01;
-    wire [3:0]  best_dist_all  = (dist_k4_s3a < best_dist_0123) ? dist_k4_s3a : best_dist_0123;
-    wire [15:0] best_x_all     = (dist_k4_s3a < best_dist_0123) ? x_k4_s3a    : best_x_0123;
+    // Helper function: select minimum of two (dist, x) pairs
+    // Lower k wins on tie (a wins over b when equal)
+    `define MIN2(da, xa, db, xb) \
+        ((db) < (da)) ? (db) : (da), \
+        ((db) < (da)) ? (xb) : (xa)
+
+    // Stage 3b: Combinational minimum selection from all 23 registered candidates
+    // Level 1: pair-wise comparisons (12 pairs + 1 leftover)
+    wire [3:0]  d01  = (dist_k1_s3a  < dist_k0_s3a)  ? dist_k1_s3a  : dist_k0_s3a;
+    wire [15:0] x01  = (dist_k1_s3a  < dist_k0_s3a)  ? x_k1_s3a     : x_k0_s3a;
+    wire [3:0]  d23  = (dist_k3_s3a  < dist_k2_s3a)  ? dist_k3_s3a  : dist_k2_s3a;
+    wire [15:0] x23  = (dist_k3_s3a  < dist_k2_s3a)  ? x_k3_s3a     : x_k2_s3a;
+    wire [3:0]  d45  = (dist_k5_s3a  < dist_k4_s3a)  ? dist_k5_s3a  : dist_k4_s3a;
+    wire [15:0] x45  = (dist_k5_s3a  < dist_k4_s3a)  ? x_k5_s3a     : x_k4_s3a;
+    wire [3:0]  d67  = (dist_k7_s3a  < dist_k6_s3a)  ? dist_k7_s3a  : dist_k6_s3a;
+    wire [15:0] x67  = (dist_k7_s3a  < dist_k6_s3a)  ? x_k7_s3a     : x_k6_s3a;
+    wire [3:0]  d89  = (dist_k9_s3a  < dist_k8_s3a)  ? dist_k9_s3a  : dist_k8_s3a;
+    wire [15:0] x89  = (dist_k9_s3a  < dist_k8_s3a)  ? x_k9_s3a     : x_k8_s3a;
+    wire [3:0]  d1011 = (dist_k11_s3a < dist_k10_s3a) ? dist_k11_s3a : dist_k10_s3a;
+    wire [15:0] x1011 = (dist_k11_s3a < dist_k10_s3a) ? x_k11_s3a    : x_k10_s3a;
+    wire [3:0]  d1213 = (dist_k13_s3a < dist_k12_s3a) ? dist_k13_s3a : dist_k12_s3a;
+    wire [15:0] x1213 = (dist_k13_s3a < dist_k12_s3a) ? x_k13_s3a    : x_k12_s3a;
+    wire [3:0]  d1415 = (dist_k15_s3a < dist_k14_s3a) ? dist_k15_s3a : dist_k14_s3a;
+    wire [15:0] x1415 = (dist_k15_s3a < dist_k14_s3a) ? x_k15_s3a    : x_k14_s3a;
+    wire [3:0]  d1617 = (dist_k17_s3a < dist_k16_s3a) ? dist_k17_s3a : dist_k16_s3a;
+    wire [15:0] x1617 = (dist_k17_s3a < dist_k16_s3a) ? x_k17_s3a    : x_k16_s3a;
+    wire [3:0]  d1819 = (dist_k19_s3a < dist_k18_s3a) ? dist_k19_s3a : dist_k18_s3a;
+    wire [15:0] x1819 = (dist_k19_s3a < dist_k18_s3a) ? x_k19_s3a    : x_k18_s3a;
+    wire [3:0]  d2021 = (dist_k21_s3a < dist_k20_s3a) ? dist_k21_s3a : dist_k20_s3a;
+    wire [15:0] x2021 = (dist_k21_s3a < dist_k20_s3a) ? x_k21_s3a    : x_k20_s3a;
+    // k=22 is leftover
+    wire [3:0]  d22   = dist_k22_s3a;
+    wire [15:0] x22   = x_k22_s3a;
+
+    // Level 2: 6 pairs from level 1 results
+    wire [3:0]  d0123   = (d23   < d01)   ? d23   : d01;
+    wire [15:0] x0123   = (d23   < d01)   ? x23   : x01;
+    wire [3:0]  d4567   = (d67   < d45)   ? d67   : d45;
+    wire [15:0] x4567   = (d67   < d45)   ? x67   : x45;
+    wire [3:0]  d891011 = (d1011 < d89)   ? d1011 : d89;
+    wire [15:0] x891011 = (d1011 < d89)   ? x1011 : x89;
+    wire [3:0]  d12131415 = (d1415 < d1213) ? d1415 : d1213;
+    wire [15:0] x12131415 = (d1415 < d1213) ? x1415 : x1213;
+    wire [3:0]  d16171819 = (d1819 < d1617) ? d1819 : d1617;
+    wire [15:0] x16171819 = (d1819 < d1617) ? x1819 : x1617;
+    wire [3:0]  d202122   = (d22   < d2021) ? d22   : d2021;
+    wire [15:0] x202122   = (d22   < d2021) ? x22   : x2021;
+
+    // Level 3: 3 pairs
+    wire [3:0]  d01234567     = (d4567   < d0123)   ? d4567   : d0123;
+    wire [15:0] x01234567     = (d4567   < d0123)   ? x4567   : x0123;
+    wire [3:0]  d891011121314 = (d12131415 < d891011) ? d12131415 : d891011;
+    wire [15:0] x891011121314 = (d12131415 < d891011) ? x12131415 : x891011;
+    wire [3:0]  d1516171819202122 = (d202122 < d16171819) ? d202122 : d16171819;
+    wire [15:0] x1516171819202122 = (d202122 < d16171819) ? x202122 : x16171819;
+
+    // Level 4: 2 comparisons
+    wire [3:0]  d_low  = (d891011121314 < d01234567) ? d891011121314 : d01234567;
+    wire [15:0] x_low  = (d891011121314 < d01234567) ? x891011121314 : x01234567;
+    wire [3:0]  best_dist_all = (d1516171819202122 < d_low) ? d1516171819202122 : d_low;
+    wire [15:0] best_x_all    = (d1516171819202122 < d_low) ? x1516171819202122 : x_low;
 
     // --- Stage 3b output registers (final channel outputs) ---
     always @(posedge clk or negedge rst_n) begin
@@ -1603,8 +1854,10 @@ module decoder_2nrm (
              .idx1(3'd0), .idx2(3'd1),
              .x_out(ch_x[0]), .distance(ch_dist[0]), .valid(ch_valid[0]));
 
-    // Channel 1: pair (0,2) M1=257, M2=61, Inv=48
-    decoder_channel_2nrm_param #(.P_M1(257), .P_M2(61), .P_INV(48))
+    // Channel 1: pair (0,2) M1=257, M2=61, Inv=47
+    // Fix: inv(257,61)=inv(13,61)=47 (13*47=611=10*61+1 ✓)
+    // Previous value 48 was wrong: 13*48=624=10*61+14 ≠ 1 (mod 61)
+    decoder_channel_2nrm_param #(.P_M1(257), .P_M2(61), .P_INV(47))
         ch1 (.clk(clk), .rst_n(rst_n), .start(start_r),
              .r0(r0),.r1(r1),.r2(r2),.r3(r3),.r4(r4),.r5(r5),
              .idx1(3'd0), .idx2(3'd2),

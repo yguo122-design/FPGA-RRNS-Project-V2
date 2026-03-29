@@ -61,23 +61,23 @@ LATENCY_DATA = {
     # Algorithm name must match ALGO_ORDER below
     # '2NRM-RRNS' = 2NRM-RRNS-Parallel (displayed as "2NRM-RRNS-Parallel" in chart)
     '2NRM-RRNS': {
-        'Total': 33,   # ← Avg_Clk_Per_Trial     from BER_Index=0 row
+        'Total': 73,   # ← Avg_Clk_Per_Trial     from BER_Index=0 row
         'Enc':   7,    # ← Avg_Enc_Clk_Per_Trial from BER_Index=0 row
         'Dec':   24,   # ← Avg_Dec_Clk_Per_Trial from BER_Index=0 row
     },
     # 2NRM-RRNS-Serial: same encoder, sequential FSM decoder (~225 cycles typical)
     '2NRM-RRNS-Serial': {
-        'Total': 372,    # ← Fill after synthesis (Avg_Clk_Per_Trial)
+        'Total': 1096,    # ← Fill after synthesis (Avg_Clk_Per_Trial)
         'Enc':   7,    # ← Fill after synthesis (Avg_Enc_Clk_Per_Trial)
-        'Dec':   363,    # ← Fill after synthesis (Avg_Dec_Clk_Per_Trial)
+        'Dec':   1047,    # ← Fill after synthesis (Avg_Dec_Clk_Per_Trial)
     },
     '3NRM-RRNS': {
-        'Total': 851,
+        'Total': 3277,   # Bug #104 fix: 1892 dec + 5 enc + overhead (updated 2026-03-28)
         'Enc':   5,
-        'Dec':   844,
+        'Dec':   2048,   # Bug #104 fix: was 844 cycles, now 1892 cycles after k>0 enumeration
     },
     'C-RRNS-MLD': {
-        'Total': 935,
+        'Total': 995,
         'Enc':   5,
         'Dec':   928,
     },
@@ -85,11 +85,6 @@ LATENCY_DATA = {
         'Total': 16,
         'Enc':   5,
         'Dec':   9,
-    },
-    'C-RRNS-CRT': {
-        'Total': 14,
-        'Enc':   5,
-        'Dec':   7,
     },
     'RS': {
         'Total': 143,
@@ -113,7 +108,6 @@ ALGO_ORDER = [
     '3NRM-RRNS',
     'C-RRNS-MLD',
     'C-RRNS-MRC',
-    'C-RRNS-CRT',
     'RS',
 ]
 

@@ -39,36 +39,47 @@ NUM_BURST_STEPS = MAX_BURST_LEN  # Should be 15
 # ================= Utility Functions =================
 def calculate_threshold(target_ber: float, burst_len: int, w_valid: int) -> int:
     """
-    Calculate LFSR Threshold Integer with invalid-offset compensation.
+    Calculate LFSR Threshold Integer.
 
+    Two injection models are used depending on burst_len:
+
+    --- burst_len == 1 (Random Single Bit, Bit-Scan Bernoulli model) ---
+    The FPGA auto_scan_engine uses a bit-scan loop: for each bit position
+    0..(w_valid-1), it compares inj_lfsr directly against threshold_val.
+    The per-bit flip probability is:
+        P(flip) = threshold_val / (2^32 - 1) = BER_target
+
+    Therefore: threshold_val = round(BER_target * (2^32 - 1))
+
+    No offset-range compensation is needed because the bit-scan model does
+    not use the error_lut ROM at all — it directly flips individual bits.
+    This allows actual BER to reach up to 100% without saturation.
+
+    --- burst_len > 1 (Cluster Burst, ROM single-injection model) ---
     BUG FIX (2026-03-21, Bug #62):
-    The original formula did NOT account for the fact that the 6-bit random offset
-    from the LFSR covers [0, 63], but only [0, w_valid - burst_len] are valid
-    (i.e., the burst fits entirely within the W_valid window).
-    Invalid offsets cause the error_lut ROM to return 0 (no injection), which
-    means the actual injection probability is:
+    The original formula did NOT account for the fact that the 6-bit random
+    offset from the LFSR covers [0, 63], but only [0, w_valid - burst_len]
+    are valid. Invalid offsets cause the error_lut ROM to return 0 (no
+    injection), so the actual injection probability is:
         P_actual = P_trigger * (w_valid - burst_len + 1) / 64
 
-    This causes the actual BER to be systematically LOWER than the target BER
-    by a factor of (w_valid - burst_len + 1) / 64, which varies per algorithm
-    and burst length (e.g., 2NRM L=1: 41/64 = 64.1%, RS L=1: 48/64 = 75.0%).
-
-    FIX: Multiply P_trigger by the compensation factor 64 / num_valid_offsets
-    so that the effective injection probability after ROM filtering equals the
-    intended P_trigger:
+    FIX: Multiply P_trigger by the compensation factor 64 / num_valid_offsets:
         P_trigger_corrected = (BER_target * W_valid / L) * (64 / num_valid_offsets)
-        where num_valid_offsets = W_valid - L + 1
-
-    This ensures:
-        P_actual = P_trigger_corrected * num_valid_offsets / 64
-                 = (BER_target * W_valid / L)   [as intended]
 
     Formula: Threshold_Int = round( P_trigger_corrected * (2^32 - 1) )
     """
     if burst_len <= 0:
         return 0
 
-    # Number of valid offsets: offset in [0, w_valid - burst_len]
+    if burst_len == 1:
+        # Bit-scan Bernoulli model: threshold = BER_target * (2^32 - 1)
+        # FPGA uses: if (inj_lfsr < threshold_val) → flip this bit
+        # P(flip) = threshold_val / (2^32 - 1) = BER_target  ✓
+        # No ×64 compensation needed — bit-scan does not use error_lut ROM.
+        threshold = round(target_ber * (2**32 - 1))
+        return max(0, min(threshold, 0xFFFFFFFF))
+
+    # burst_len > 1: ROM-based single burst injection (original formula with Bug #62 fix)
     num_valid_offsets = w_valid - burst_len + 1
     if num_valid_offsets <= 0:
         # burst_len > w_valid: impossible to inject, return 0
@@ -81,8 +92,6 @@ def calculate_threshold(target_ber: float, burst_len: int, w_valid: int) -> int:
     p_trigger_base = (target_ber * w_valid) / burst_len
 
     # Compensation factor: scale up to account for invalid offsets returning 0
-    # After ROM filtering, effective probability = p_trigger_corrected * (num_valid_offsets / 64)
-    # We want this to equal p_trigger_base, so:
     compensation = OFFSET_RANGE / num_valid_offsets
     p_trigger_corrected = p_trigger_base * compensation
 

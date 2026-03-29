@@ -58,9 +58,10 @@ module decoder_3nrm (
     localparam ST_DIST_S1 = 4'd7;
     localparam ST_DIST_S2 = 4'd8;
     localparam ST_DIST_S3 = 4'd9;
-    localparam ST_UPDATE  = 4'd10;
-    localparam ST_NEXT    = 4'd11;
-    localparam ST_DONE    = 4'd12;
+    localparam ST_UPDATE    = 4'd10;
+    localparam ST_NEXT      = 4'd11;
+    localparam ST_DONE      = 4'd12;
+    localparam ST_CAND_NEXT = 4'd13;  // Bug #104 fix: advance to next candidate k
 
     localparam NRM_MAX_ERRORS = 3;
 
@@ -70,14 +71,16 @@ module decoder_3nrm (
     // =========================================================================
     // 2. Lookup Tables for 84 Triplets (synthesized as ROM/LUTRAM)
     // =========================================================================
-    reg [6:0] lut_mi [0:83];
-    reg [6:0] lut_mj [0:83];
-    reg [6:0] lut_mk [0:83];
-    reg [6:0] lut_inv_ij  [0:83];
-    reg [6:0] lut_inv_ijk [0:83];
-    reg [3:0] lut_idx_i [0:83];
-    reg [3:0] lut_idx_j [0:83];
-    reg [3:0] lut_idx_k [0:83];
+    reg [6:0]  lut_mi [0:83];
+    reg [6:0]  lut_mj [0:83];
+    reg [6:0]  lut_mk [0:83];
+    reg [6:0]  lut_inv_ij  [0:83];
+    reg [6:0]  lut_inv_ijk [0:83];
+    reg [3:0]  lut_idx_i [0:83];
+    reg [3:0]  lut_idx_j [0:83];
+    reg [3:0]  lut_idx_k [0:83];
+    // Bug #104 fix: PERIOD = mi * mj * mk for each triplet (18-bit, max 262080)
+    reg [17:0] lut_period [0:83];
 
     initial begin
         lut_mi[ 0]=7'd64; lut_mj[ 0]=7'd63; lut_mk[ 0]=7'd65;
@@ -332,6 +335,36 @@ module decoder_3nrm (
         lut_mi[83]=7'd19; lut_mj[83]=7'd17; lut_mk[83]=7'd11;
         lut_inv_ij[83]=7'd9; lut_inv_ijk[83]=7'd3;
         lut_idx_i[83]=4'd6; lut_idx_j[83]=4'd7; lut_idx_k[83]=4'd8;
+        // Bug #104 fix: PERIOD = mi * mj * mk for each triplet
+        // Used to enumerate k>0 candidates: X_k = X_base + k * PERIOD
+        lut_period[ 0]=18'd262080; lut_period[ 1]=18'd125056; lut_period[ 2]=18'd117056;
+        lut_period[ 3]=18'd92736;  lut_period[ 4]=18'd76608;  lut_period[ 5]=18'd68544;
+        lut_period[ 6]=18'd44352;  lut_period[ 7]=18'd129280; lut_period[ 8]=18'd121088;
+        lut_period[ 9]=18'd95680;  lut_period[10]=18'd79040;  lut_period[11]=18'd70720;
+        lut_period[12]=18'd45760;  lut_period[13]=18'd57536;  lut_period[14]=18'd45632;
+        lut_period[15]=18'd37696;  lut_period[16]=18'd33728;  lut_period[17]=18'd21824;
+        lut_period[18]=18'd42688;  lut_period[19]=18'd35264;  lut_period[20]=18'd31552;
+        lut_period[21]=18'd20416;  lut_period[22]=18'd27968;  lut_period[23]=18'd25024;
+        lut_period[24]=18'd16192;  lut_period[25]=18'd20672;  lut_period[26]=18'd13376;
+        lut_period[27]=18'd11968;  lut_period[28]=18'd127575; lut_period[29]=18'd119595;
+        lut_period[30]=18'd94185;  lut_period[31]=18'd77805;  lut_period[32]=18'd69615;
+        lut_period[33]=18'd45045;  lut_period[34]=18'd56637;  lut_period[35]=18'd44919;
+        lut_period[36]=18'd37107;  lut_period[37]=18'd33201;  lut_period[38]=18'd21483;
+        lut_period[39]=18'd42021;  lut_period[40]=18'd34713;  lut_period[41]=18'd31059;
+        lut_period[42]=18'd20097;  lut_period[43]=18'd27531;  lut_period[44]=18'd24633;
+        lut_period[45]=18'd15939;  lut_period[46]=18'd20349;  lut_period[47]=18'd13167;
+        lut_period[48]=18'd11781;  lut_period[49]=18'd58435;  lut_period[50]=18'd46345;
+        lut_period[51]=18'd38285;  lut_period[52]=18'd34255;  lut_period[53]=18'd22165;
+        lut_period[54]=18'd43355;  lut_period[55]=18'd35815;  lut_period[56]=18'd32045;
+        lut_period[57]=18'd20735;  lut_period[58]=18'd28405;  lut_period[59]=18'd25415;
+        lut_period[60]=18'd16445;  lut_period[61]=18'd20995;  lut_period[62]=18'd13585;
+        lut_period[63]=18'd12155;  lut_period[64]=18'd20677;  lut_period[65]=18'd17081;
+        lut_period[66]=18'd15283;  lut_period[67]=18'd9889;   lut_period[68]=18'd13547;
+        lut_period[69]=18'd12121;  lut_period[70]=18'd7843;   lut_period[71]=18'd10013;
+        lut_period[72]=18'd6479;   lut_period[73]=18'd5797;   lut_period[74]=18'd12673;
+        lut_period[75]=18'd11339;  lut_period[76]=18'd7337;   lut_period[77]=18'd9367;
+        lut_period[78]=18'd6061;   lut_period[79]=18'd5423;   lut_period[80]=18'd7429;
+        lut_period[81]=18'd4807;   lut_period[82]=18'd4301;   lut_period[83]=18'd3553;
     end
 
     // =========================================================================
@@ -365,6 +398,9 @@ module decoder_3nrm (
     // =========================================================================
     reg [3:0]  min_dist;
     reg [15:0] best_x;
+    // Bug #104 fix: candidate index k (0..18) for X_k = X_base + k*PERIOD
+    reg [4:0]  cand_k;
+    reg [17:0] mrc_period;  // Registered PERIOD for current triplet
 
     // =========================================================================
     // 7. Case-Based Constant Modulo Functions (v3.0 TIMING FIX)
@@ -494,6 +530,8 @@ module decoder_3nrm (
             mrc_a3raw     <= 8'd0;
             mrc_a3        <= 7'd0;
             mrc_x         <= 18'd0;
+            cand_k        <= 5'd0;
+            mrc_period    <= 18'd0;
             for (ii=0; ii<9; ii=ii+1) begin
                 recv_r[ii] <= 7'd0;
                 cand_r[ii] <= 7'd0;
@@ -539,15 +577,33 @@ module decoder_3nrm (
                     mrc_ri      <= recv_r[lut_idx_i[trip_idx]];
                     mrc_rj      <= recv_r[lut_idx_j[trip_idx]];
                     mrc_rk      <= recv_r[lut_idx_k[trip_idx]];
+                    // Bug #104 fix: load PERIOD and reset candidate index
+                    mrc_period  <= lut_period[trip_idx];
+                    cand_k      <= 5'd0;
                     state <= ST_MRC_S2;
                 end
 
                 ST_MRC_S2: begin
                     mrc_a1    <= mrc_ri;
-                    mrc_diff2 <= (mrc_rj >= mrc_ri) ? (mrc_rj - mrc_ri) :
-                                 (mrc_rj + mrc_mj - mrc_ri);
-                    mrc_diff3 <= (mrc_rk >= mrc_ri) ? (mrc_rk - mrc_ri) :
-                                 (mrc_rk + mrc_mk - mrc_ri);
+                    // diff2 = (rj - ri) mod mj
+                    // Safe: rj < mj, ri < mi. If ri < mj, one addition suffices.
+                    // But ri can be up to mi-1=64, mj can be as small as 11.
+                    // Bug #100 fix: use case-based modulo to ensure correct result
+                    // regardless of relative sizes of ri and mj/mk.
+                    mrc_diff2 <= mod_by_idx_7bit(
+                        {7'b0, mrc_rj} + {7'b0, mrc_mj} + {7'b0, mrc_mj} +
+                        {7'b0, mrc_mj} + {7'b0, mrc_mj} + {7'b0, mrc_mj} +
+                        {7'b0, mrc_mj} - {7'b0, mrc_ri},
+                        mrc_idx_j);
+                    // diff3 = (rk - ri) mod mk
+                    // Bug #100 fix: ri can be up to 64, mk can be as small as 11.
+                    // One addition of mk is insufficient when ri > mk.
+                    // Use multiple additions to ensure positive result before modulo.
+                    mrc_diff3 <= mod_by_idx_7bit(
+                        {7'b0, mrc_rk} + {7'b0, mrc_mk} + {7'b0, mrc_mk} +
+                        {7'b0, mrc_mk} + {7'b0, mrc_mk} + {7'b0, mrc_mk} +
+                        {7'b0, mrc_mk} - {7'b0, mrc_ri},
+                        mrc_idx_k);
                     state <= ST_MRC_S3;
                 end
 
@@ -605,12 +661,28 @@ module decoder_3nrm (
                 end
 
                 ST_UPDATE: begin
+                    // Bug #104 fix: update best candidate, then check for more k values
                     cur_dist <= dist_comb;
                     if (dist_comb < min_dist) begin
                         min_dist <= dist_comb;
                         best_x   <= mrc_x[15:0];
                     end
-                    state <= ST_NEXT;
+                    state <= ST_CAND_NEXT;  // Bug #104: was ST_NEXT
+                end
+
+                ST_CAND_NEXT: begin
+                    // Bug #104 fix: enumerate k>0 candidates: X_{k+1} = X_k + PERIOD
+                    // If X_{k+1} <= 65535, compute distance for it; else advance to next triplet.
+                    // This is the same fix as 2NRM Bug #102.
+                    if (mrc_x + mrc_period <= 18'd65535) begin
+                        // Advance to next candidate: X_{k+1} = X_k + PERIOD
+                        mrc_x  <= mrc_x + mrc_period;
+                        cand_k <= cand_k + 5'd1;
+                        state  <= ST_DIST_S2;  // Skip ST_DIST_S1 (mrc_x already set)
+                    end else begin
+                        // No more valid candidates for this triplet
+                        state <= ST_NEXT;
+                    end
                 end
 
                 ST_NEXT: begin

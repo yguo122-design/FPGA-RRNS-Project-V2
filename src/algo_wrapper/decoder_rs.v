@@ -60,6 +60,9 @@ module decoder_rs (
             4'd12: gf_alog = 4'd15;
             4'd13: gf_alog = 4'd13;
             4'd14: gf_alog = 4'd9;
+            4'd15: gf_alog = 4'd1;  // Bug #99 fix: α^15 = α^0 = 1 in GF(2^4)
+                                     // Without this, gf_inv(1) = gf_alog(15-0) = gf_alog(15) = 0 (wrong!)
+                                     // This caused BM to fail when b_reg=1, and Forney to fail when fn_sv=1
             default: gf_alog = 4'd0;
         endcase
     endfunction
@@ -314,6 +317,11 @@ module decoder_rs (
                 // S[j] = (...((cw[0]*alpha^j + cw[1])*alpha^j + cw[2])...)*alpha^j + cw[11]
                 // Each step: acc = acc * alpha^j ^ cw[syn_idx]
                 // After 12 steps (idx 0..11), acc = S[j]
+                //
+                // NOTE: In Verilog NBA semantics, when syn_idx=11 triggers
+                // ST_SYN_STORE, syn_acc already holds the fully updated value
+                // (including cw[11]) from the previous clock edge. The original
+                // code S[syn_j] <= syn_acc is correct.
                 // -------------------------------------------------------
                 ST_SYN_CALC: begin
                     // Horner step: acc = acc * alpha^j ^ cw[syn_idx]
@@ -326,8 +334,10 @@ module decoder_rs (
                 end
 
                 ST_SYN_STORE: begin
-                    // Store final accumulator as S[syn_j]
-                    // Note: last Horner step already done in ST_SYN_CALC
+                    // REVERTED: Bug #97 fix was incorrect.
+                    // In Verilog NBA semantics, syn_acc in ST_SYN_STORE already holds
+                    // the value registered at the end of ST_SYN_CALC (syn_idx=11),
+                    // which correctly includes cw[11]. The original code is correct.
                     S[syn_j] <= syn_acc;
                     if (syn_j == 4'd8) begin
                         state <= ST_SYN_DONE;
