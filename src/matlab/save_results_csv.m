@@ -14,8 +14,8 @@ function save_results_csv(results, algo_id, algo_name, mode_str, ...
 
     % FPGA-measured reference latencies (cycles at 50 MHz, from Table 4.2)
     % Format: algo_id → [enc_cycles, dec_cycles]
-    enc_ref = containers.Map({0,1,2,3,4,5}, {7, 5, 5, 5, 5, 4});
-    dec_ref = containers.Map({0,1,2,3,4,5}, {24, 844, 928, 9, 7, 137});
+    enc_ref = containers.Map({6,1,2,3,4,5}, {7, 5, 5, 5, 5, 4});
+    dec_ref = containers.Map({6,1,2,3,4,5}, {24, 844, 928, 9, 7, 137});
 
     if isKey(enc_ref, algo_id)
         enc_cyc = enc_ref(algo_id);

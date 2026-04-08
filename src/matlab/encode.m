@@ -6,7 +6,7 @@ function codeword = encode(data, algo_id)
 %   Inputs:
 %     data     - uint32 scalar, 16-bit data value [0, 65535]
 %     algo_id  - Algorithm ID:
-%                  0 = 2NRM-RRNS  (41-bit codeword)
+%                  6 = 2NRM-RRNS-Serial  (41-bit codeword)
 %                  1 = 3NRM-RRNS  (48-bit codeword)
 %                  2 = C-RRNS-MLD (61-bit codeword)
 %                  3 = C-RRNS-MRC (61-bit codeword, same encoder as MLD)
@@ -16,7 +16,7 @@ function codeword = encode(data, algo_id)
 %     codeword - uint64 packed codeword (right-aligned)
 
     switch algo_id
-        case 0
+        case 6
             codeword = encode_2nrm(data);
         case 1
             codeword = encode_3nrm(data);

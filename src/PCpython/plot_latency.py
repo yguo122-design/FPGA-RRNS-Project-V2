@@ -67,12 +67,12 @@ LATENCY_DATA = {
     },
     # 2NRM-RRNS-Serial: same encoder, sequential FSM decoder (~225 cycles typical)
     '2NRM-RRNS-Serial': {
-        'Total': 1096,    # ← Fill after synthesis (Avg_Clk_Per_Trial)
+        'Total': 1056,    # ← Fill after synthesis (Avg_Clk_Per_Trial)
         'Enc':   7,    # ← Fill after synthesis (Avg_Enc_Clk_Per_Trial)
         'Dec':   1047,    # ← Fill after synthesis (Avg_Dec_Clk_Per_Trial)
     },
     '3NRM-RRNS': {
-        'Total': 3277,   # Bug #104 fix: 1892 dec + 5 enc + overhead (updated 2026-03-28)
+        'Total': 3231,   # Bug #104 fix: 1892 dec + 5 enc + overhead (updated 2026-03-28)
         'Enc':   5,
         'Dec':   2048,   # Bug #104 fix: was 844 cycles, now 1892 cycles after k>0 enumeration
     },
@@ -82,14 +82,14 @@ LATENCY_DATA = {
         'Dec':   928,
     },
     'C-RRNS-MRC': {
-        'Total': 16,
+        'Total': 76,
         'Enc':   5,
         'Dec':   9,
     },
     'RS': {
-        'Total': 143,
+        'Total': 133,
         'Enc':   4,
-        'Dec':   137,
+        'Dec':   127,
     },
 }
 

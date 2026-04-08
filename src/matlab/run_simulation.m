@@ -13,7 +13,7 @@
 %   using the existing compare_ber_curves.py script.
 %
 % Algorithms:
-%   0: 2NRM-RRNS  (41 bits, t=2, MLD)
+%   6: 2NRM-RRNS-Serial  (41 bits, t=2, MLD)
 %   1: 3NRM-RRNS  (48 bits, t=3, MLD)
 %   2: C-RRNS-MLD (61 bits, t=3, MLD)
 %   3: C-RRNS-MRC (61 bits, no correction)
@@ -57,7 +57,7 @@ NUM_BER_POINTS = 101;    % BER 0.0% to 10.0%, step 0.1%
 % Bug #104 verification: temporarily run only 3NRM-RRNS Cluster L=5
 % to compare with FPGA results. Uncomment other entries to restore full run.
 ALGO_LIST = {
-    0, '2NRM-RRNS',   41;
+    6, '2NRM-RRNS-Serial',   41;
     1, '3NRM-RRNS',   48;
     2, 'C-RRNS-MLD',  61;
     3, 'C-RRNS-MRC',  61;

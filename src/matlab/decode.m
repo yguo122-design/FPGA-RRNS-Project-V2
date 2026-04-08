@@ -6,7 +6,7 @@ function [data_out, uncorrectable] = decode(codeword, algo_id)
 %   Inputs:
 %     codeword      - uint64 packed (possibly corrupted) codeword
 %     algo_id       - Algorithm ID:
-%                       0 = 2NRM-RRNS (MLD, t=2)
+%                       6 = 2NRM-RRNS-Serial (MLD, t=2)
 %                       1 = 3NRM-RRNS (MLD, t=3)
 %                       2 = C-RRNS-MLD (MLD, t=3)
 %                       3 = C-RRNS-MRC (no correction)
@@ -25,7 +25,7 @@ function [data_out, uncorrectable] = decode(codeword, algo_id)
 %     uncorrectable - logical, true if decoder cannot correct errors
 
     switch algo_id
-        case 0
+        case 6
             [data_out, uncorrectable] = decode_2nrm_mld(codeword);
         case 1
             [data_out, uncorrectable] = decode_3nrm_mld(codeword);

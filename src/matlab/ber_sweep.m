@@ -8,7 +8,7 @@ function results = ber_sweep(algo_id, algo_name, w_valid, burst_len, ...
 %                       sample_count, num_ber_points)
 %
 %   Inputs:
-%     algo_id        - Algorithm ID (0=2NRM, 1=3NRM, 2=C-RRNS-MLD,
+%     algo_id        - Algorithm ID (6=2NRM-RRNS-Serial, 1=3NRM, 2=C-RRNS-MLD,
 %                      3=C-RRNS-MRC, 5=RS)
 %     algo_name      - Algorithm name string (for display)
 %     w_valid        - Valid codeword bit width
