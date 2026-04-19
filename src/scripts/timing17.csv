@@ -1,0 +1,11 @@
+Name,Slack,Levels,High Fanout,From,To,Total Delay,Logic Delay,Net Delay,Requirement,Source Clock,Destination Clock,Exception,Clock Uncertainty
+Path 1,-0.73,14,5,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch6/coeff_raw_s1c_reg[5]_rep__1/C,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch6/coeff_mod_s1d_reg[2]/D,10.47,4.53,5.94,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 2,-0.73,14,5,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch6/coeff_raw_s1c_reg[5]_rep__1/C,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch6/coeff_mod_s1d_reg[0]/D,10.46,4.53,5.93,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 3,-0.68,14,5,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch6/coeff_raw_s1c_reg[5]_rep__1/C,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch6/coeff_mod_s1d_reg[3]/D,10.46,4.52,5.94,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 4,-0.68,14,5,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch6/coeff_raw_s1c_reg[5]_rep__1/C,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch6/coeff_mod_s1d_reg[1]/D,10.46,4.52,5.93,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 5,-0.60,13,6,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch7/x_mod53_step1_reg_reg[6]_rep__5/C,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch7/cand_r_s2_reg[5][2]/D,10.56,5.06,5.50,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 6,-0.56,12,6,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch11/x_mod53_step1_reg_reg[8]_rep__4/C,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch11/cand_r_s2_reg[5][0]/D,10.54,5.02,5.52,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 7,-0.56,12,6,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch11/x_mod53_step1_reg_reg[8]_rep__4/C,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch11/cand_r_s2_reg[5][1]/D,10.54,5.02,5.52,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 8,-0.48,12,4,u_fsm/u_engine/u_dec_b/u_dec_2nrm/ch6/x_mod53_step1_reg_reg[7]_rep__4/C,u_fsm/u_engine/u_dec_b/u_dec_2nrm/ch6/cand_r_s2_reg[5][2]/D,10.45,4.52,5.93,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 9,-0.47,12,6,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch11/x_mod53_step1_reg_reg[8]_rep__4/C,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch11/cand_r_s2_reg[5][2]/D,10.45,5.02,5.43,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 10,-0.47,12,6,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch11/x_mod53_step1_reg_reg[8]_rep__4/C,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch11/cand_r_s2_reg[5][3]/D,10.45,5.02,5.43,10.00,sys_clk_pin,sys_clk_pin,,0.04

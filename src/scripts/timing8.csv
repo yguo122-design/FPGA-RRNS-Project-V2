@@ -1,0 +1,11 @@
+Name,Slack,Levels,High Fanout,From,To,Total Delay,Logic Delay,Net Delay,Requirement,Source Clock,Destination Clock,Exception,Clock Uncertainty
+Path 1,-1.07,16,12,u_fsm/u_engine/sym_b_latch_reg[2]_rep__14/C,u_fsm/u_engine/u_enc/u_enc_2nrm/residues_out_B_reg[12]/D,11.03,4.94,6.09,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 2,-1.05,16,12,u_fsm/u_engine/sym_b_latch_reg[2]_rep__14/C,u_fsm/u_engine/u_enc/u_enc_2nrm/residues_out_B_reg[13]/D,11.05,4.96,6.09,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 3,-1.00,18,5,u_fsm/u_engine/sym_b_latch_reg[1]_rep__10/C,u_fsm/u_engine/u_enc/u_enc_2nrm/residues_out_B_reg[7]/D,10.95,5.38,5.57,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 4,-0.99,18,5,u_fsm/u_engine/sym_b_latch_reg[1]_rep__10/C,u_fsm/u_engine/u_enc/u_enc_2nrm/residues_out_B_reg[8]/D,10.95,5.38,5.57,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 5,-0.96,16,10,u_fsm/u_engine/sym_a_latch_reg[3]_rep__6/C,u_fsm/u_engine/u_enc/u_enc_2nrm/residues_out_A_reg[12]/D,10.93,5.49,5.43,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 6,-0.94,16,10,u_fsm/u_engine/sym_a_latch_reg[3]_rep__6/C,u_fsm/u_engine/u_enc/u_enc_2nrm/residues_out_A_reg[13]/D,10.95,5.52,5.43,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 7,-0.90,15,5,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch0/x_cand_16_s1e_reg[2]_rep__0/C,u_fsm/u_engine/u_dec_a/u_dec_2nrm/ch0/cand_r_s2a_reg[0][1]/D,10.86,4.18,6.68,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 8,-0.89,14,12,u_fsm/u_engine/u_dec_b/u_dec_2nrm/ch4/x_mod55_step1_reg_reg[4]/C,u_fsm/u_engine/u_dec_b/u_dec_2nrm/ch4/cand_r_s2c1_reg[4][0]/D,10.85,5.18,5.68,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 9,-0.88,18,8,u_fsm/u_engine/sym_a_latch_reg[2]_rep__4/C,u_fsm/u_engine/u_enc/u_enc_2nrm/residues_out_A_reg[8]/D,10.88,5.64,5.24,10.00,sys_clk_pin,sys_clk_pin,,0.04
+Path 10,-0.86,16,10,u_fsm/u_engine/sym_a_latch_reg[3]_rep__6/C,u_fsm/u_engine/u_enc/u_enc_2nrm/residues_out_A_reg[15]/D,10.83,5.49,5.34,10.00,sys_clk_pin,sys_clk_pin,,0.04

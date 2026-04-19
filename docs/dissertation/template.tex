@@ -1,0 +1,86 @@
+\documentclass[12pt, a4paper]{report}
+
+% 1. Times New Roman字体
+\usepackage{mathptmx}
+\usepackage{helvet}
+\usepackage{courier}
+\renewcommand{\familydefault}{\rmdefault}
+
+% 2. 1.5倍行距
+\usepackage[onehalfspacing]{setspace}
+
+% 3. 页面设置
+\usepackage[margin=1in]{geometry}
+
+% 4. 数学支持
+\usepackage{amsmath,amssymb}
+
+% 5. 图表支持
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{float}
+
+% 6. 表格
+\usepackage{booktabs}
+\usepackage{array}
+
+% 7. 代码列表
+\usepackage{listings}
+\usepackage{xcolor}
+
+% 8. 超链接
+\usepackage[colorlinks=true,
+            linkcolor=blue,
+            citecolor=blue,
+            urlcolor=blue]{hyperref}
+
+% 9. 算法伪代码
+\usepackage{algorithm}
+\usepackage{algorithmic}
+
+% 文档开始
+\begin{document}
+
+% 标题页
+\begin{titlepage}
+    \centering
+    \vspace*{2cm}
+    
+    {\LARGE\bfseries Hardware Acceleration for Cluster Fault Tolerance in Hybrid CMOS/non-CMOS Memories\par}
+    
+    \vspace{1.5cm}
+    
+    {\Large Yuqi Guo\par}
+    {\large Student ID: 230184273\par}
+    
+    \vspace{1cm}
+    
+    {\large A dissertation submitted in partial fulfillment\\
+    of the requirements for the degree of\\
+    Bachelor of Engineering\par}
+    
+    \vspace{1.5cm}
+    
+    {\large Department of Electronic and Electrical Engineering\\
+    University of Sheffield\par}
+    
+    \vspace{1cm}
+    
+    {\large \today\par}
+    
+    \vfill
+\end{titlepage}
+
+% 摘要
+\begin{abstract}
+% 你的摘要内容
+\end{abstract}
+
+% 目录
+\tableofcontents
+\newpage
+
+% 正文从这里开始
+$body$
+
+\end{document}

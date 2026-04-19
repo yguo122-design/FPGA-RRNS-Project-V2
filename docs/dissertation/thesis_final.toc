@@ -1,0 +1,78 @@
+\babel@toc {english}{}\relax 
+\contentsline {chapter}{Abstract}{2}{chapter*.1}%
+\contentsline {chapter}{Individual Contribution}{3}{chapter*.2}%
+\contentsline {chapter}{Acknowledgement}{5}{chapter*.3}%
+\contentsline {chapter}{Chapter 1 Introduction}{8}{chapter*.5}%
+\contentsline {section}{1.1 Background}{8}{section*.6}%
+\contentsline {section}{1.2 Aims and Objectives}{9}{section*.7}%
+\contentsline {section}{1.3 Expected Contributions}{10}{section*.8}%
+\contentsline {section}{1.4 Report Structure}{11}{section*.9}%
+\contentsline {chapter}{Chapter 2 Theoretical Background}{12}{chapter*.10}%
+\contentsline {section}{2.1 Residue Number System (RNS) Fundamentals}{12}{section*.11}%
+\contentsline {section}{2.2 Redundant Residue Number System (RRNS) Codes}{12}{section*.12}%
+\contentsline {subsection}{2.2.1 RRNS Encoding}{13}{section*.13}%
+\contentsline {subsection}{2.2.2 RRNS Decoding}{13}{section*.14}%
+\contentsline {section}{2.3 Conventional RRNS (C-RRNS)}{14}{section*.15}%
+\contentsline {section}{2.4 Reed-Solomon (RS) Codes}{14}{section*.16}%
+\contentsline {section}{2.5 Three Non-Redundant Moduli RRNS (3NRM-RRNS)}{15}{section*.17}%
+\contentsline {section}{2.6 Two Non-Redundant Moduli RRNS (2NRM-RRNS)}{15}{section*.18}%
+\contentsline {section}{2.7 Maximum Likelihood Decoding (MLD) for Modified RRNS}{16}{section*.19}%
+\contentsline {section}{2.8 Comparison of ECC Schemes}{17}{section*.20}%
+\contentsline {chapter}{Chapter 3 Methodology}{18}{chapter*.21}%
+\contentsline {section}{3.1 MATLAB Simulation Phase}{18}{section*.22}%
+\contentsline {section}{3.2 FPGA Implementation Phase}{19}{section*.23}%
+\contentsline {subsection}{3.2.1 Top-Level System Architecture}{19}{section*.24}%
+\contentsline {subsubsection}{3.2.1.1 Overview}{19}{section*.25}%
+\contentsline {subsubsection}{3.2.1.2 System Workflow}{21}{section*.26}%
+\contentsline {subsubsection}{3.2.1.4 Main Scan FSM State Diagram}{21}{section*.27}%
+\contentsline {subsubsection}{3.2.1.5 Clock Domain, Operating Frequency, and Reset Strategy}{22}{section*.28}%
+\contentsline {subsection}{3.2.2 Probabilistic Fault Injection Engine}{23}{section*.29}%
+\contentsline {subsubsection}{3.2.2.1 LFSR-Based Pseudo-Random Fault Generation}{23}{section*.30}%
+\contentsline {subsubsection}{3.2.2.2 Seed Initialisation Mechanism}{23}{section*.31}%
+\contentsline {subsubsection}{3.2.2.3 Injection Trigger Mechanism}{24}{section*.32}%
+\contentsline {subsubsection}{3.2.2.4 Error Pattern Generation and Boundary Safety}{25}{section*.33}%
+\contentsline {subsubsection}{3.2.2.5 Impact of Burst Length on Maximum Achievable BER}{26}{section*.34}%
+\contentsline {subsubsection}{3.2.2.6 Design Advantages and Novel Contributions}{26}{section*.35}%
+\contentsline {subsection}{3.2.3 End-to-End Test Loop and Algorithm Extensibility}{27}{section*.36}%
+\contentsline {subsubsection}{3.2.3.1 Single-Trial Execution Pipeline}{27}{section*.37}%
+\contentsline {subsubsection}{3.2.3.2 Encoder Wrapper and Decoder Wrapper: Unified Interface for Algorithm Extensibility}{28}{section*.38}%
+\contentsline {subsubsection}{3.2.3.3 Implemented Algorithms and Architectural Variants}{28}{section*.39}%
+\contentsline {chapter}{Chapter 4 Results and Discussion}{30}{chapter*.40}%
+\contentsline {section}{4.1 Experimental Setup Summary}{30}{section*.41}%
+\contentsline {section}{4.2 BER Performance Under Random Single-Bit Fault Injection}{31}{section*.42}%
+\contentsline {section}{4.3 BER Performance Under Cluster Burst Injection}{33}{section*.43}%
+\contentsline {subsection}{4.3.1 Performance at Representative Burst Length (L=12)}{33}{section*.44}%
+\contentsline {subsection}{4.3.2 Impact of Burst Length on Error Correction Capability}{34}{section*.45}%
+\contentsline {section}{4.4 Processing Latency Comparison}{35}{section*.46}%
+\contentsline {section}{4.5 Resource Utilisation Comparison}{37}{section*.47}%
+\contentsline {section}{4.6 Power Consumption Analysis}{38}{section*.48}%
+\contentsline {section}{4.7 Storage Efficiency Comparison}{39}{section*.49}%
+\contentsline {section}{4.8 Overall Comparison and Conclusions}{40}{section*.50}%
+\contentsline {section}{4.9 Conclusions and Further Work}{42}{section*.51}%
+\contentsline {chapter}{Chapter 5 Economic, Legal, Social, Ethical and Environmental Context}{43}{chapter*.52}%
+\contentsline {section}{5.1 Economic Context}{43}{section*.53}%
+\contentsline {section}{5.2 Legal and Intellectual Property Context}{43}{section*.54}%
+\contentsline {section}{5.3 Social and Ethical Context}{43}{section*.55}%
+\contentsline {section}{5.4 Environmental Context}{44}{section*.56}%
+\contentsline {section}{5.5 Safety and Risk Context}{44}{section*.57}%
+\contentsline {chapter}{References}{45}{chapter*.58}%
+\contentsline {chapter}{Appendices}{47}{chapter*.59}%
+\contentsline {section}{Appendix A: Algorithm Overview and Comparison}{47}{section*.60}%
+\contentsline {section}{Appendix B: 2NRM-RRNS Encoder}{47}{section*.61}%
+\contentsline {section}{Appendix C: 2NRM-RRNS Decoder --- Parallel MLD Implementation}{48}{section*.62}%
+\contentsline {section}{Appendix D: 2NRM-RRNS Decoder --- Serial FSM Implementation}{50}{section*.63}%
+\contentsline {section}{Appendix E: 3NRM-RRNS Encoder and Decoder}{52}{section*.64}%
+\contentsline {subsection}{E.1 Encoder}{52}{section*.65}%
+\contentsline {subsection}{E.2 Decoder (Sequential FSM MLD)}{52}{section*.66}%
+\contentsline {section}{Appendix F: C-RRNS Encoder and Decoder Variants}{54}{section*.67}%
+\contentsline {subsection}{F.1 Encoder (Shared by All C-RRNS Variants)}{54}{section*.68}%
+\contentsline {subsection}{F.2 C-RRNS-MLD Decoder}{54}{section*.69}%
+\contentsline {subsection}{F.3 C-RRNS-MRC Decoder (Direct Mixed Radix Conversion)}{56}{section*.70}%
+\contentsline {subsection}{F.4 C-RRNS-CRT Decoder (Direct Chinese Remainder Theorem)}{56}{section*.71}%
+\contentsline {section}{Appendix G: RS(12,4) Encoder and Decoder}{57}{section*.72}%
+\contentsline {subsection}{G.1 Encoder}{57}{section*.73}%
+\contentsline {subsection}{G.2 Decoder}{57}{section*.74}%
+\contentsline {section}{Appendix H: 1st round MATLAB simulation}{58}{section*.75}%
+\contentsline {section}{Appendix I: Hierarchical Module Structure of FPGA platform}{62}{section*.76}%
+\contentsline {section}{Appendix J: Algorithm : 32-bit Galois LFSR}{63}{section*.77}%
+\contentsline {section}{Appendix K: Detailed Cluster-Length BER Curves}{64}{section*.78}%
